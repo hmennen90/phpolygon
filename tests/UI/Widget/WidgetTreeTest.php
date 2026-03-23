@@ -1,0 +1,239 @@
+<?php
+
+declare(strict_types=1);
+
+namespace PHPolygon\Tests\UI\Widget;
+
+use PHPUnit\Framework\TestCase;
+use PHPolygon\Math\Rect;
+use PHPolygon\Runtime\Input;
+use PHPolygon\UI\UIStyle;
+use PHPolygon\UI\Widget\Button;
+use PHPolygon\UI\Widget\Checkbox;
+use PHPolygon\UI\Widget\Label;
+use PHPolygon\UI\Widget\Sizing;
+use PHPolygon\UI\Widget\TextInput;
+use PHPolygon\UI\Widget\Toggle;
+use PHPolygon\UI\Widget\VBox;
+use PHPolygon\UI\Widget\WidgetTree;
+
+class WidgetTreeTest extends TestCase
+{
+    private Input $input;
+    private WidgetTestHelper $renderer;
+    private UIStyle $style;
+
+    protected function setUp(): void
+    {
+        $this->input = new Input();
+        $this->renderer = new WidgetTestHelper();
+        $this->style = UIStyle::dark();
+    }
+
+    private function tree(VBox $root): WidgetTree
+    {
+        return new WidgetTree($root, $this->renderer, $this->input, 800, 600, $this->style);
+    }
+
+    public function testPerformLayoutSetsRootBounds(): void
+    {
+        $root = new VBox();
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        $this->assertEquals(800.0, $root->getBounds()->width);
+        $this->assertEquals(600.0, $root->getBounds()->height);
+    }
+
+    public function testDrawProducesRenderCalls(): void
+    {
+        $root = new VBox();
+        $root->addChild((new Label('Hi'))->size(Sizing::fixed(100, 20)));
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+        $tree->draw();
+
+        $textCalls = array_filter($this->renderer->calls, fn($c) => $c['method'] === 'drawText');
+        $this->assertNotEmpty($textCalls);
+    }
+
+    public function testButtonClickEvent(): void
+    {
+        $root = new VBox();
+        $btn = (new Button('OK'))->size(Sizing::fixed(100, 30));
+        $root->addChild($btn);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        $clicked = false;
+        $btn->on('click', function () use (&$clicked) { $clicked = true; });
+
+        // Press on button
+        $this->input->handleCursorPosEvent(
+            $btn->getBounds()->x + 5,
+            $btn->getBounds()->y + 5,
+        );
+        $this->input->handleMouseButtonEvent(0, 1);
+        $tree->processInput();
+        $this->assertTrue($btn->pressed);
+
+        // Release on button
+        $this->input->unsuppress();
+        $this->input->endFrame();
+        $this->input->handleMouseButtonEvent(0, 0);
+        $tree->processInput();
+
+        $this->assertTrue($clicked);
+        $this->assertFalse($btn->pressed);
+    }
+
+    public function testCheckboxToggleViaTree(): void
+    {
+        $root = new VBox();
+        $cb = (new Checkbox('Sound', false))->size(Sizing::fixed(200, 20));
+        $root->addChild($cb);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        $changed = null;
+        $cb->on('change', function (bool $val) use (&$changed) { $changed = $val; });
+
+        // Click on checkbox
+        $this->input->handleCursorPosEvent(
+            $cb->getBounds()->x + 5,
+            $cb->getBounds()->y + 5,
+        );
+        $this->input->handleMouseButtonEvent(0, 1);
+        $tree->processInput();
+
+        $this->assertTrue($cb->checked);
+        $this->assertTrue($changed);
+    }
+
+    public function testToggleViaTree(): void
+    {
+        $root = new VBox();
+        $toggle = (new Toggle('Fullscreen', false))->size(Sizing::fixed(200, 24));
+        $root->addChild($toggle);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        $this->input->handleCursorPosEvent(
+            $toggle->getBounds()->x + 5,
+            $toggle->getBounds()->y + 5,
+        );
+        $this->input->handleMouseButtonEvent(0, 1);
+        $tree->processInput();
+
+        $this->assertTrue($toggle->on);
+    }
+
+    public function testTextInputFocus(): void
+    {
+        $root = new VBox();
+        $ti = (new TextInput('Name', '', 'Enter name'))->size(Sizing::fixed(200, 40));
+        $root->addChild($ti);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        // Click on text input to focus
+        $this->input->handleCursorPosEvent(
+            $ti->getBounds()->x + 5,
+            $ti->getBounds()->y + 25, // below label
+        );
+        $this->input->handleMouseButtonEvent(0, 1);
+        $tree->processInput();
+
+        $this->assertTrue($ti->focused);
+        $this->assertSame($ti, $tree->getFocusedWidget());
+    }
+
+    public function testTextInputTyping(): void
+    {
+        $root = new VBox();
+        $ti = (new TextInput('', ''))->size(Sizing::fixed(200, 30));
+        $root->addChild($ti);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        // Focus
+        $tree->setFocus($ti);
+
+        // Type characters
+        $this->input->handleCharEvent(72); // H
+        $this->input->handleCharEvent(105); // i
+        $tree->processInput();
+
+        $this->assertEquals('Hi', $ti->text);
+    }
+
+    public function testInputSuppressedWhenHovering(): void
+    {
+        $root = new VBox();
+        $btn = (new Button('Test'))->size(Sizing::fixed(100, 30));
+        $root->addChild($btn);
+
+        $tree = $this->tree($root);
+        $tree->performLayout();
+
+        $this->input->handleCursorPosEvent(
+            $btn->getBounds()->x + 5,
+            $btn->getBounds()->y + 5,
+        );
+        $tree->processInput();
+
+        $this->assertTrue($this->input->isSuppressed());
+    }
+
+    public function testSetRootResetsState(): void
+    {
+        $root1 = new VBox();
+        $btn = (new Button('A'))->size(Sizing::fixed(100, 30));
+        $root1->addChild($btn);
+
+        $tree = $this->tree($root1);
+        $tree->performLayout();
+
+        $root2 = new VBox();
+        $tree->setRoot($root2);
+
+        $this->assertSame($root2, $tree->getRoot());
+        $this->assertNull($tree->getFocusedWidget());
+    }
+
+    public function testSetFocusUnfocusesPrevious(): void
+    {
+        $root = new VBox();
+        $ti1 = new TextInput('A', '');
+        $ti2 = new TextInput('B', '');
+        $root->addChild($ti1)->addChild($ti2);
+
+        $tree = $this->tree($root);
+
+        $tree->setFocus($ti1);
+        $this->assertTrue($ti1->focused);
+
+        $tree->setFocus($ti2);
+        $this->assertFalse($ti1->focused);
+        $this->assertTrue($ti2->focused);
+    }
+
+    public function testFullUpdateCycle(): void
+    {
+        $root = new VBox();
+        $root->addChild((new Label('Status'))->size(Sizing::fixed(100, 20)));
+
+        $tree = $this->tree($root);
+
+        // Should not throw — runs processInput + performLayout + draw
+        $tree->update();
+
+        $this->assertNotEmpty($this->renderer->calls);
+    }
+}

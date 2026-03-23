@@ -25,15 +25,32 @@ class Input
     private float $scrollX = 0.0;
     private float $scrollY = 0.0;
 
+    /** @var list<string> Characters typed this frame (UTF-8) */
+    private array $charBuffer = [];
+
+    /** When true, key/mouse events are not recorded (UI is consuming input) */
+    private bool $suppressed = false;
+
     public function handleKeyEvent(int $key, int $action): void
     {
+        if ($this->suppressed) {
+            return;
+        }
         // GLFW_PRESS = 1, GLFW_RELEASE = 0, GLFW_REPEAT = 2
         $this->keysDown[$key] = $action !== 0; // GLFW_RELEASE
     }
 
     public function handleMouseButtonEvent(int $button, int $action): void
     {
+        if ($this->suppressed) {
+            return;
+        }
         $this->mouseDown[$button] = $action !== 0;
+    }
+
+    public function handleCharEvent(int $codepoint): void
+    {
+        $this->charBuffer[] = mb_chr($codepoint, 'UTF-8');
     }
 
     public function handleCursorPosEvent(float $x, float $y): void
@@ -103,11 +120,52 @@ class Input
         return $this->scrollY;
     }
 
+    /**
+     * Get all characters typed this frame.
+     *
+     * @return list<string>
+     */
+    public function getCharsTyped(): array
+    {
+        return $this->charBuffer;
+    }
+
+    /**
+     * Get typed characters as a single concatenated string.
+     */
+    public function getTextInput(): string
+    {
+        return implode('', $this->charBuffer);
+    }
+
+    /**
+     * Suppress game input (key/mouse) for this frame.
+     * Char events still pass through so UI text fields keep working.
+     */
+    public function suppress(): void
+    {
+        $this->suppressed = true;
+    }
+
+    /**
+     * Re-enable game input processing.
+     */
+    public function unsuppress(): void
+    {
+        $this->suppressed = false;
+    }
+
+    public function isSuppressed(): bool
+    {
+        return $this->suppressed;
+    }
+
     public function endFrame(): void
     {
         $this->keysPrev = $this->keysDown;
         $this->mousePrev = $this->mouseDown;
         $this->scrollX = 0.0;
         $this->scrollY = 0.0;
+        $this->charBuffer = [];
     }
 }

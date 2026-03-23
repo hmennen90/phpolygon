@@ -16,6 +16,13 @@ class Window
     private float $contentScaleX = 1.0;
     private float $contentScaleY = 1.0;
     private bool $initialized = false;
+    private bool $fullscreen = false;
+
+    /** Stored windowed position/size for restoring after fullscreen */
+    private int $windowedX = 0;
+    private int $windowedY = 0;
+    private int $windowedWidth = 0;
+    private int $windowedHeight = 0;
 
     public function __construct(
         private int $width,
@@ -64,6 +71,10 @@ class Window
 
         glfwSetScrollCallback($this->handle, function (float $xOffset, float $yOffset) use ($input) {
             $input->handleScrollEvent($xOffset, $yOffset);
+        });
+
+        glfwSetCharCallback($this->handle, function (int $codepoint) use ($input) {
+            $input->handleCharEvent($codepoint);
         });
 
         glfwSetFramebufferSizeCallback($this->handle, function (int $width, int $height) {
@@ -143,6 +154,75 @@ class Window
     {
         $this->title = $title;
         glfwSetWindowTitle($this->handle, $title);
+    }
+
+    public function isFullscreen(): bool
+    {
+        return $this->fullscreen;
+    }
+
+    /**
+     * Switch to borderless fullscreen on the primary monitor.
+     */
+    public function setFullscreen(): void
+    {
+        if ($this->fullscreen) {
+            return;
+        }
+
+        // Save windowed geometry for later restore
+        glfwGetWindowPos($this->handle, $this->windowedX, $this->windowedY);
+        $this->windowedWidth = $this->width;
+        $this->windowedHeight = $this->height;
+
+        $monitor = glfwGetPrimaryMonitor();
+        $mode = glfwGetVideoMode($monitor);
+
+        glfwSetWindowMonitor(
+            $this->handle,
+            $monitor,
+            0,
+            0,
+            $mode->width,
+            $mode->height,
+            $mode->refreshRate,
+        );
+
+        $this->fullscreen = true;
+    }
+
+    /**
+     * Return to windowed mode with the previous window size and position.
+     */
+    public function setWindowed(): void
+    {
+        if (!$this->fullscreen) {
+            return;
+        }
+
+        glfwSetWindowMonitor(
+            $this->handle,
+            null,
+            $this->windowedX,
+            $this->windowedY,
+            $this->windowedWidth,
+            $this->windowedHeight,
+            0,
+        );
+
+        $this->fullscreen = false;
+    }
+
+    /**
+     * Toggle between fullscreen and windowed mode.
+     */
+    public function toggleFullscreen(): void
+    {
+        if ($this->fullscreen) {
+            $this->setWindowed();
+        } else {
+            $this->setFullscreen();
+        }
     }
 
     public function destroy(): void
