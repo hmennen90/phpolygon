@@ -18,7 +18,7 @@
 
 PHPolygon is a standalone game engine written entirely in PHP. It leverages
 [php-glfw](https://github.com/mario-deluna/php-glfw) for OpenGL 4.1 / NanoVG
-rendering and [php-vulkan](https://github.com/aspect-build/php-vulkan) for 3D
+rendering and [php-vulkan](https://github.com/hmennen90/php-vulkan) for 3D
 graphics. The primary authoring tool is Claude Code — scenes, components, and
 game logic are generated and iterated on through AI-assisted workflows.
 
@@ -78,7 +78,8 @@ PHPolygon\
 ### Requirements
 
 - PHP 8.2+
-- [php-glfw](https://github.com/mario-deluna/php-glfw) extension
+- [php-glfw](https://github.com/mario-deluna/php-glfw) extension (OpenGL 4.1 + NanoVG)
+- [php-vulkan](https://github.com/hmennen90/php-vulkan) extension (Vulkan rendering)
 - Composer
 
 ### Installation
@@ -144,13 +145,35 @@ class MainMenu extends Scene
 
 The `examples/` directory contains runnable demos:
 
-| Example | Description |
-|---------|-------------|
-| `hello_world.php` | Minimal engine setup with NanoVG rendering |
-| `opengl_triangle.php` | Custom OpenGL 4.1 shaders with rotating triangle |
-| `opengl_cube.php` | 3D Phong-lit cube with camera orbit controls |
-| `vulkan_compute.php` | Vulkan compute shader generating animated plasma in a window |
-| `vulkan_triangle.php` | Vulkan graphics pipeline with real-time rotating 3D pyramid |
+### Hello World — NanoVG 2D Engine
+
+<img src="examples/hello_world.gif" alt="Hello World" width="640">
+
+Movable entity with camera, grid background, HUD overlay. WASD controls.
+
+### OpenGL Triangle — Custom Shaders
+
+<img src="examples/opengl_triangle.gif" alt="OpenGL Triangle" width="640">
+
+Rotating RGB triangle with vertex/fragment shaders, pulsing brightness.
+
+### OpenGL 3D Cube — Phong Lighting
+
+<img src="examples/opengl_cube.gif" alt="OpenGL Cube" width="640">
+
+Phong-lit spinning cube with camera orbit (WASD), zoom (scroll), depth testing.
+
+### Vulkan Compute — GPU Plasma
+
+<img src="examples/vulkan_compute.gif" alt="Vulkan Compute" width="640">
+
+Compute shader generates animated plasma pattern, presented via swapchain.
+
+### Vulkan Triangle — 3D Graphics Pipeline
+
+<img src="examples/vulkan_triangle.gif" alt="Vulkan Triangle" width="640">
+
+Rotating 3D pyramid with perspective projection, push constants, swapchain presentation.
 
 ## Roadmap
 
