@@ -183,8 +183,8 @@ Rotating 3D pyramid with perspective projection, push constants, swapchain prese
 | 2 | Scene system — SceneManager, hierarchy, prefabs, transpiler | Done |
 | 3 | Game systems — physics, collision, input mapping, audio | Done |
 | 4 | Editor infrastructure — inspector, registry, commands | Done |
-| 5 | Code Tycoon — first game on the engine | Next |
-| 6 | Vulkan 3D / Netrunner — Renderer3D, command buffers | Planned |
+| 5 | First game — engine validation through real-world usage | Next |
+| 6 | Vulkan 3D — Renderer3D, command buffers, 3D pipeline | Planned |
 
 ## Testing
 
