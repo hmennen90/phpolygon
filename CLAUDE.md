@@ -7,13 +7,12 @@ works in this repository. Read it fully before writing any code.
 
 ## Engine identity
 
-**PHPolygon** is a PHP-native game engine built on top of VISU (forked from
-phpgl/visu). The primary authoring tool is Claude Code. The primary render backend
-is OpenGL 4.1 via php-glfw/NanoVG for 2D, Vulkan via php-vulkan for 3D (Phase 6).
+**PHPolygon** is a standalone PHP-native game engine. The primary authoring tool
+is Claude Code. The primary render backend is OpenGL 4.1 via php-glfw/NanoVG
+for 2D, Vulkan via php-vulkan for 3D (Phase 6).
 
-Active games on this engine:
-- **Code Tycoon** — 2D business simulation, Phase 1–5 target
-- **Netrunner: Uprising** — 3D cyberpunk RPG, Phase 6 target
+Games are built in separate repositories and require `phpolygon/phpolygon`
+via Composer.
 
 ---
 
@@ -44,8 +43,8 @@ Active games on this engine:
 ### Render interface: Layered
 - `RenderContextInterface` — base: `beginFrame()`, `endFrame()`, `clear()`,
   `setViewport()`
-- `Renderer2D extends RenderContextInterface` — NanoVG backend, used by Code Tycoon
-- `Renderer3D extends RenderContextInterface` — Vulkan backend, used by Netrunner
+- `Renderer2D extends RenderContextInterface` — NanoVG backend for 2D games
+- `Renderer3D extends RenderContextInterface` — Vulkan backend for 3D games
 
 `Renderer3D` uses a **Command Buffer abstraction** from day one. PHP builds a
 `RenderCommandList`; the backend (Vulkan) executes it. The OpenGL 3D backend
@@ -55,8 +54,8 @@ the OpenGL state-machine model.
 ### GPU backends
 | Backend | Status | Target |
 |---|---|---|
-| OpenGL 4.1 via php-glfw | Active | Code Tycoon (2D), all phases |
-| Vulkan via php-vulkan | Phase 6 | Netrunner: Uprising (3D) |
+| OpenGL 4.1 via php-glfw | Active | 2D games, all phases |
+| Vulkan via php-vulkan | Phase 6 | 3D games |
 | D3D11 / D3D12 | Cancelled | — |
 | Metal | Not planned | — |
 
