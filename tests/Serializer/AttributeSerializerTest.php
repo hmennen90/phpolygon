@@ -35,8 +35,9 @@ class AttributeSerializerTest extends TestCase
         $this->assertArrayHasKey('position', $array);
         $this->assertArrayHasKey('rotation', $array);
         $this->assertArrayHasKey('scale', $array);
-        // parentEntityId should NOT be in output (it's #[Hidden])
-        $this->assertArrayNotHasKey('parentEntityId', $array);
+        // parentEntityId and childEntityIds are now #[Property] for hierarchy support
+        $this->assertArrayHasKey('parentEntityId', $array);
+        $this->assertArrayHasKey('childEntityIds', $array);
 
         $restored = $this->serializer->fromArray($array, Transform2D::class);
         $this->assertInstanceOf(Transform2D::class, $restored);

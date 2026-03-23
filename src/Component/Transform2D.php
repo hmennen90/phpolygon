@@ -25,8 +25,15 @@ class Transform2D extends AbstractComponent
     #[Property(editorHint: 'vec2')]
     public Vec2 $scale;
 
-    #[Hidden]
+    #[Property]
     public ?int $parentEntityId = null;
+
+    /** @var list<int> */
+    #[Property]
+    public array $childEntityIds = [];
+
+    #[Hidden]
+    public Mat3 $worldMatrix;
 
     public function __construct(
         ?Vec2 $position = null,
@@ -38,10 +45,21 @@ class Transform2D extends AbstractComponent
         $this->rotation = $rotation;
         $this->scale = $scale ?? Vec2::one();
         $this->parentEntityId = $parentEntityId;
+        $this->worldMatrix = Mat3::identity();
     }
 
     public function getLocalMatrix(): Mat3
     {
         return Mat3::trs($this->position, deg2rad($this->rotation), $this->scale);
+    }
+
+    public function getWorldMatrix(): Mat3
+    {
+        return $this->worldMatrix;
+    }
+
+    public function getWorldPosition(): Vec2
+    {
+        return $this->worldMatrix->getTranslation();
     }
 }

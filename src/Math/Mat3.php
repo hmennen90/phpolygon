@@ -143,6 +143,11 @@ class Mat3
         return $this->m[$col * 3 + $row];
     }
 
+    public function getTranslation(): Vec2
+    {
+        return new Vec2($this->m[6], $this->m[7]);
+    }
+
     /** @return float[] */
     public function toArray(): array
     {

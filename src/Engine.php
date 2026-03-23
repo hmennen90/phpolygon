@@ -13,6 +13,7 @@ use PHPolygon\Runtime\Clock;
 use PHPolygon\Runtime\GameLoop;
 use PHPolygon\Runtime\Input;
 use PHPolygon\Runtime\Window;
+use PHPolygon\Scene\SceneManager;
 
 class Engine
 {
@@ -24,6 +25,7 @@ class Engine
     public readonly EventDispatcher $events;
     public readonly GameLoop $gameLoop;
     public readonly Clock $clock;
+    public readonly SceneManager $scenes;
 
     public Renderer2D $renderer2D;
 
@@ -48,6 +50,7 @@ class Engine
         $this->camera2D = new Camera2D($config->width, $config->height);
         $this->textures = new TextureManager($config->assetsPath);
         $this->gameLoop = new GameLoop($config->targetTickRate);
+        $this->scenes = new SceneManager($this);
 
         $this->window = new Window(
             $config->width,
