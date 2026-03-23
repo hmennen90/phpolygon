@@ -14,5 +14,9 @@ class EngineConfig
         public readonly bool $resizable = true,
         public readonly float $targetTickRate = 60.0,
         public readonly string $assetsPath = '',
+        public readonly string $defaultLocale = 'en',
+        public readonly string $fallbackLocale = 'en',
+        public readonly string $savePath = 'saves',
+        public readonly int $maxSaveSlots = 10,
     ) {}
 }

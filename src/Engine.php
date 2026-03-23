@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace PHPolygon;
 
+use PHPolygon\Audio\AudioManager;
 use PHPolygon\ECS\World;
 use PHPolygon\Event\EventDispatcher;
+use PHPolygon\Locale\LocaleManager;
 use PHPolygon\Rendering\Camera2D;
 use PHPolygon\Rendering\Renderer2D;
 use PHPolygon\Rendering\TextureManager;
@@ -13,6 +15,7 @@ use PHPolygon\Runtime\Clock;
 use PHPolygon\Runtime\GameLoop;
 use PHPolygon\Runtime\Input;
 use PHPolygon\Runtime\Window;
+use PHPolygon\SaveGame\SaveManager;
 use PHPolygon\Scene\SceneManager;
 
 class Engine
@@ -26,6 +29,9 @@ class Engine
     public readonly GameLoop $gameLoop;
     public readonly Clock $clock;
     public readonly SceneManager $scenes;
+    public readonly AudioManager $audio;
+    public readonly LocaleManager $locale;
+    public readonly SaveManager $saves;
 
     public Renderer2D $renderer2D;
 
@@ -51,6 +57,9 @@ class Engine
         $this->textures = new TextureManager($config->assetsPath);
         $this->gameLoop = new GameLoop($config->targetTickRate);
         $this->scenes = new SceneManager($this);
+        $this->audio = new AudioManager();
+        $this->locale = new LocaleManager($config->defaultLocale, $config->fallbackLocale);
+        $this->saves = new SaveManager($config->savePath, $config->maxSaveSlots);
 
         $this->window = new Window(
             $config->width,
@@ -135,6 +144,7 @@ class Engine
 
     private function shutdown(): void
     {
+        $this->audio->dispose();
         $this->textures->clear();
         $this->world->clear();
         $this->window->destroy();
