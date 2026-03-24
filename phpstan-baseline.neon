@@ -1,0 +1,289 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\AddComponentCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/AddComponentCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\CreateEntityCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/CreateEntityCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\DeleteEntityCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/DeleteEntityCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\GetComponentSchemaCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/GetComponentSchemaCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\GetEntityHierarchyCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/GetEntityHierarchyCommand.php
+
+		-
+			message: '#^Property PHPolygon\\Editor\\Command\\GetEntityHierarchyCommand\:\:\$args is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Editor/Command/GetEntityHierarchyCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\ListComponentsCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/ListComponentsCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\ListScenesCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/ListScenesCommand.php
+
+		-
+			message: '#^Property PHPolygon\\Editor\\Command\\ListScenesCommand\:\:\$args is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Editor/Command/ListScenesCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\LoadSceneCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/LoadSceneCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\RedoCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/RedoCommand.php
+
+		-
+			message: '#^Property PHPolygon\\Editor\\Command\\RedoCommand\:\:\$args is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Editor/Command/RedoCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\RemoveComponentCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/RemoveComponentCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\RenameEntityCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/RenameEntityCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\ReparentEntityCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/ReparentEntityCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\SaveSceneCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/SaveSceneCommand.php
+
+		-
+			message: '#^Property PHPolygon\\Editor\\Command\\SaveSceneCommand\:\:\$args is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Editor/Command/SaveSceneCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\UndoCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/UndoCommand.php
+
+		-
+			message: '#^Property PHPolygon\\Editor\\Command\\UndoCommand\:\:\$args is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Editor/Command/UndoCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Command\\UpdatePropertyCommand\:\:__construct\(\) has parameter \$args with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Command/UpdatePropertyCommand.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Inspector\\PropertySchema\:\:__construct\(\) has parameter \$range with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/Inspector/PropertySchema.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\Registry\\SystemRegistry\:\:toArray\(\) should return array\<string, mixed\> but returns list\<array\<string, string\>\>\.$#'
+			identifier: return.type
+			count: 1
+			path: src/Editor/Registry/SystemRegistry.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\SceneDocument\:\:addEntityToParent\(\) has parameter \$newEntity with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/SceneDocument.php
+
+		-
+			message: '#^Method PHPolygon\\Editor\\SceneDocument\:\:getEntity\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Editor/SceneDocument.php
+
+		-
+			message: '#^Method PHPolygon\\Input\\InputMap\:\:addAxis\(\) has parameter \$negative with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Input/InputMap.php
+
+		-
+			message: '#^Method PHPolygon\\Input\\InputMap\:\:addAxis\(\) has parameter \$positive with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Input/InputMap.php
+
+		-
+			message: '#^Method PHPolygon\\Locale\\LocaleManager\:\:flatten\(\) has parameter \$data with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Locale/LocaleManager.php
+
+		-
+			message: '#^Property PHPolygon\\Locale\\LocaleManager\:\:\$loadedFiles is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Locale/LocaleManager.php
+
+		-
+			message: '#^Access to an undefined property GLFWvidmode\:\:\$height\.$#'
+			identifier: property.notFound
+			count: 1
+			path: src/Runtime/Window.php
+
+		-
+			message: '#^Access to an undefined property GLFWvidmode\:\:\$refreshRate\.$#'
+			identifier: property.notFound
+			count: 1
+			path: src/Runtime/Window.php
+
+		-
+			message: '#^Access to an undefined property GLFWvidmode\:\:\$width\.$#'
+			identifier: property.notFound
+			count: 1
+			path: src/Runtime/Window.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>createdAt" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: src/SaveGame/SaveManager.php
+
+		-
+			message: '#^Property PHPolygon\\Scene\\SceneManager\:\:\$globalSystems is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Scene/SceneManager.php
+
+		-
+			message: '#^Call to function is_string\(\) with string will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Offset 0 on array\<string, mixed\> on left side of \?\? does not exist\.$#'
+			identifier: nullCoalesce.offset
+			count: 2
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Offset 1 on array\<string, mixed\> on left side of \?\? does not exist\.$#'
+			identifier: nullCoalesce.offset
+			count: 2
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Offset 2 on array\<string, mixed\> on left side of \?\? does not exist\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Parameter &\$classes by\-ref type of method PHPolygon\\Scene\\Transpiler\\PhpCodeGenerator\:\:collectEntityClasses\(\) expects list\<string\>, non\-empty\-list\<mixed\> given\.$#'
+			identifier: parameterByRef.type
+			count: 2
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Property PHPolygon\\Scene\\Transpiler\\PhpCodeGenerator\:\:\$serializer is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Scene/Transpiler/PhpCodeGenerator.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between PHPolygon\\Component\\RigidBody2D and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 2
+			path: src/System/Physics2DSystem.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>restitution" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: src/System/Physics2DSystem.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>velocity" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: src/System/Physics2DSystem.php
+
+		-
+			message: '#^Trait PHPolygon\\Testing\\VisualTestCase is used zero times and is not analysed\.$#'
+			identifier: trait.unused
+			count: 1
+			path: src/Testing/VisualTestCase.php
+
+		-
+			message: '#^Property PHPolygon\\UI\\UIContext\:\:\$hotWidget is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/UI/UIContext.php
+
+		-
+			message: '#^Property PHPolygon\\UI\\UIContext\:\:\$layoutStack type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/UI/UIContext.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>height" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: src/UI/Widget/Image.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>width" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: src/UI/Widget/Image.php
+
+		-
+			message: '#^Instanceof between PHPolygon\\UI\\Widget\\Widget\|null and PHPolygon\\UI\\Widget\\TextInput will always evaluate to false\.$#'
+			identifier: instanceof.alwaysFalse
+			count: 1
+			path: src/UI/Widget/WidgetTree.php
