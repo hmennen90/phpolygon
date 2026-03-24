@@ -139,26 +139,29 @@ class UIContext
     /**
      * Clickable button. Returns true on the frame it was clicked.
      *
-     * @param float $width Override width (0 = auto: regionWidth in vertical, text-fit in horizontal)
+     * @param float $width    Override width (0 = auto: regionWidth in vertical, text-fit in horizontal)
+     * @param bool  $disabled When true, button is grayed out and not clickable
      */
-    public function button(string $id, string $label, float $width = 0.0): bool
+    public function button(string $id, string $label, float $width = 0.0, bool $disabled = false): bool
     {
         $s = $this->style;
         $h = $s->fontSize + $s->padding * 2;
 
-        // Calculate button width
+        // Calculate button width — auto-sized text gets horizontal padding
         if ($width > 0.0) {
             $w = $width;
         } elseif ($this->flow === 'horizontal') {
-            // Auto-size to text in horizontal mode
-            $w = mb_strlen($label) * $s->fontSize * 0.55 + $s->padding * 2;
+            $w = mb_strlen($label) * $s->fontSize * 0.55 + $s->buttonPaddingH * 2;
         } else {
             $w = $this->regionWidth;
         }
 
+        // Clamp to region width to prevent overflow
+        $w = min($w, $this->regionWidth);
+
         $rect = new Rect($this->cursorX, $this->cursorY, $w, $h);
 
-        $hovered = $this->isHovered($rect);
+        $hovered = !$disabled && $this->isHovered($rect);
         $clicked = false;
         $pressing = false;
 
@@ -180,11 +183,18 @@ class UIContext
             }
         }
 
-        $bg = $pressing ? $s->activeColor
-            : ($hovered ? $s->hoverColor : $s->backgroundColor);
+        // Visual state
+        if ($disabled) {
+            $bg = $s->disabledColor;
+            $textColor = $s->disabledTextColor;
+        } else {
+            $bg = $pressing ? $s->activeColor
+                : ($hovered ? $s->hoverColor : $s->backgroundColor);
+            $textColor = $s->textColor;
+        }
 
         $this->renderer->drawRoundedRect($rect->x, $rect->y, $w, $h, $s->borderRadius, $bg);
-        $this->renderer->drawTextCentered($label, $rect->x + $w * 0.5, $rect->y + $h * 0.5, $s->fontSize, $s->textColor);
+        $this->renderer->drawTextCentered($label, $rect->x + $w * 0.5, $rect->y + $h * 0.5, $s->fontSize, $textColor);
 
         $this->advance($this->flow === 'horizontal' ? $w : $h);
         return $clicked;
