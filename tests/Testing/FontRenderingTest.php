@@ -25,7 +25,9 @@ class FontRenderingTest extends TestCase
 
     protected function usePlatformSuffix(): bool
     {
-        return true; // Fonts need per-platform snapshots
+        // Font snapshots are generated in a fixed Alpine container
+        // to ensure deterministic FreeType output. No platform suffix needed.
+        return false;
     }
 
     public function testTextRendering(): void

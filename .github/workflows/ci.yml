@@ -123,33 +123,49 @@ jobs:
       - name: Run PHPStan
         run: vendor/bin/phpstan analyse --error-format=github
 
-  vrt-snapshots:
-    name: VRT snapshot check
+  vrt:
+    name: VRT (Alpine container)
     runs-on: ubuntu-latest
+    container:
+      image: php:8.4-cli-alpine
 
     steps:
+      - name: Install system dependencies
+        run: |
+          apk add --no-cache \
+            git unzip freetype freetype-dev libpng libpng-dev \
+            libjpeg-turbo libjpeg-turbo-dev $PHPIZE_DEPS
+          docker-php-ext-configure gd --with-freetype --with-jpeg
+          docker-php-ext-install gd
+
       - uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.4'
-          extensions: gd, mbstring, dom, xml
-          coverage: none
+      - name: Install Composer
+        run: |
+          php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+          php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+          rm composer-setup.php
 
-      - name: Install Composer dependencies
+      - name: Install dependencies
         run: composer install --no-interaction --ignore-platform-reqs
 
-      - name: Run VRT tests (platform-neutral only)
-        run: vendor/bin/phpunit --exclude-group font-vrt tests/Testing/
+      - name: Run all VRT tests (including fonts)
+        run: vendor/bin/phpunit tests/Testing/
 
-      - name: Check for snapshot changes (platform-neutral only)
+      - name: Check for uncommitted snapshot changes
         run: |
-          changed=$(git diff --name-only tests/ | grep -v '\-gd-' || true)
-          if [ -n "$changed" ]; then
-            echo "::error::Platform-neutral VRT snapshots are out of date:"
-            echo "$changed"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          changed=$(git diff --name-only tests/ || true)
+          new=$(git ls-files --others --exclude-standard tests/ || true)
+          if [ -n "$changed" ] || [ -n "$new" ]; then
+            echo "::error::VRT snapshots are out of date. Regenerate in the Alpine container and commit."
             echo ""
-            echo "Run tests locally and commit updated snapshots."
+            echo "Changed files:"
+            echo "$changed"
+            echo "$new"
+            echo ""
+            echo "To regenerate locally:"
+            echo "  docker run --rm -v \$(pwd):/app -w /app phpolygon-vrt \\"
+            echo "    sh -c 'composer install --ignore-platform-reqs && PHPOLYGON_UPDATE_SNAPSHOTS=1 vendor/bin/phpunit tests/Testing/'"
             exit 1
           fi
