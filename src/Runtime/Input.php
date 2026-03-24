@@ -186,11 +186,17 @@ class Input
         $this->scrollY = 0.0;
         $this->charBuffer = [];
 
-        // Frame-based suppression countdown
-        if ($this->suppressFrames > 0) {
-            $this->suppressFrames--;
-            if ($this->suppressFrames <= 0 && microtime(true) >= $this->suppressUntil) {
+        // Auto-expire timed suppression
+        if ($this->suppressed) {
+            if ($this->suppressFrames > 0) {
+                $this->suppressFrames--;
+            }
+            // Clear suppressed when both frame and time limits have expired
+            $framesExpired = $this->suppressFrames <= 0;
+            $timeExpired = $this->suppressUntil <= 0.0 || microtime(true) >= $this->suppressUntil;
+            if ($framesExpired && $timeExpired) {
                 $this->suppressed = false;
+                $this->suppressUntil = 0.0;
             }
         }
     }
