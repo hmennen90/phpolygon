@@ -95,6 +95,11 @@ if ($command === null || $command === 'help') {
     exit(0);
 }
 
+if ($command === 'editor') {
+    launchEditor();
+    exit(0);
+}
+
 if ($command !== 'build') {
     fwrite(STDERR, "Unknown command: {$command}\n");
     printUsage();
@@ -273,14 +278,70 @@ function dryRun(BuildConfig $config, array $targets, string $outputDir, ?string 
     echo str_repeat('-', 50) . "\n";
 }
 
+function launchEditor(): void
+{
+    // Resolve editor directory: check PHPolygon's own editor/ first,
+    // then the project's vendor path
+    $candidates = [
+        __DIR__ . '/../editor',                          // PHPolygon dev / standalone
+        dirname(__DIR__, 3) . '/phpolygon/phpolygon/editor', // Installed as dependency (vendor/)
+    ];
+
+    $editorDir = null;
+    foreach ($candidates as $path) {
+        if (is_dir($path) && file_exists($path . '/artisan')) {
+            $editorDir = realpath($path);
+            break;
+        }
+    }
+
+    if ($editorDir === null) {
+        fwrite(STDERR, "\033[31mError:\033[0m Editor not found. Checked:\n");
+        foreach ($candidates as $path) {
+            fwrite(STDERR, "  - {$path}\n");
+        }
+        exit(1);
+    }
+
+    echo "\033[1mPHPolygon Editor\033[0m\n";
+    echo "  Directory: {$editorDir}\n";
+    echo "  Starting NativePHP application...\n\n";
+
+    // Set the project root as env var so the editor knows which game to load
+    $projectRoot = getcwd() ?: dirname(__DIR__);
+    putenv("PHPOLYGON_PROJECT_ROOT={$projectRoot}");
+
+    $descriptors = [STDIN, STDOUT, STDERR];
+    $process = proc_open(
+        ['php', 'artisan', 'native:serve'],
+        $descriptors,
+        $pipes,
+        $editorDir,
+        array_merge($_ENV, ['PHPOLYGON_PROJECT_ROOT' => $projectRoot]),
+    );
+
+    if (!is_resource($process)) {
+        fwrite(STDERR, "\033[31mError:\033[0m Failed to start editor process.\n");
+        exit(1);
+    }
+
+    $exitCode = proc_close($process);
+    exit($exitCode);
+}
+
 function printUsage(): void
 {
     echo <<<'USAGE'
 
-PHPolygon Game Builder
+PHPolygon CLI
 
 Usage:
   phpolygon build [platform] [options]
+  phpolygon editor
+
+Commands:
+  build    Build game for distribution
+  editor   Launch the PHPolygon scene editor
 
 Platforms:
   macos-arm64        macOS Apple Silicon
@@ -307,6 +368,7 @@ Examples:
   phpolygon build macos-arm64            Build for macOS ARM
   phpolygon build all --variant steam    Build all platforms with Steam
   phpolygon build --dry-run              Show config without building
+  phpolygon editor                       Launch the scene editor
 
 USAGE;
 }
