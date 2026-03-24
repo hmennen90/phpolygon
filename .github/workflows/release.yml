@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      prerelease:
+        description: 'Pre-release label (e.g. alpha, beta, rc — leave empty for stable)'
+        required: false
+        type: string
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          # Get latest tag (semver sorted)
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          echo "Previous version: $LATEST"
+
+          # Strip 'v' prefix and any pre-release suffix
+          CLEAN="${LATEST#v}"
+          CLEAN="${CLEAN%%-*}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN"
+
+          case "${{ inputs.version }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MAJOR=$MAJOR
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              MAJOR=$MAJOR
+              MINOR=$MINOR
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          PRERELEASE="${{ inputs.prerelease }}"
+          if [ -n "$PRERELEASE" ]; then
+            VERSION="${VERSION}-${PRERELEASE}"
+          fi
+
+          TAG="v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "previous=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([ -n '${{ inputs.prerelease }}' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "New version: $TAG"
+
+      - name: Check tag does not exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag ${{ steps.version.outputs.tag }} already exists"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS="${{ steps.version.outputs.previous }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            if [ "$PREVIOUS" = "v0.0.0" ]; then
+              echo "Initial release."
+            else
+              echo "## What's Changed"
+              echo ""
+              git log "${PREVIOUS}..HEAD" --pretty=format:"- %s (%h)" --no-merges
+              echo ""
+              echo ""
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS}...${TAG}"
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          generate_release_notes: false
