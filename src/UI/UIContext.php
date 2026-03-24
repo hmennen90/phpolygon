@@ -61,6 +61,11 @@ class UIContext
         $this->style = $style ?? UIStyle::dark();
     }
 
+    public function getInput(): Input
+    {
+        return $this->input;
+    }
+
     public function getStyle(): UIStyle
     {
         return $this->style;
