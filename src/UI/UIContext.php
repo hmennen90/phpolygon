@@ -30,6 +30,12 @@ class UIContext
     /** Current layout region width */
     private float $regionWidth = 300.0;
 
+    /** Current flow direction: 'vertical' or 'horizontal' */
+    private string $flow = 'vertical';
+
+    /** Layout stack for nested begin/end pairs */
+    private array $layoutStack = [];
+
     /** Tracks the hot (hovered) and active (pressed) widget IDs */
     private string $hotWidget = '';
     private string $activeWidget = '';
@@ -67,24 +73,45 @@ class UIContext
     }
 
     /**
-     * Begin a UI frame. Call before any widgets.
+     * Begin a UI layout region.
+     *
+     * @param string $flow 'vertical' (default) or 'horizontal'
      */
-    public function begin(float $x = 10.0, float $y = 10.0, float $width = 300.0): void
+    public function begin(float $x = 10.0, float $y = 10.0, float $width = 300.0, string $flow = 'vertical'): void
     {
+        // Push current state onto stack for nesting
+        $this->layoutStack[] = [
+            'x' => $this->cursorX,
+            'y' => $this->cursorY,
+            'w' => $this->regionWidth,
+            'flow' => $this->flow,
+            'hovered' => $this->anyHovered,
+        ];
+
         $this->cursorX = $x;
         $this->cursorY = $y;
         $this->regionWidth = $width;
+        $this->flow = $flow;
         $this->anyHovered = false;
         $this->renderer->setFont($this->style->fontName);
     }
 
     /**
-     * End a UI frame.
+     * End a UI layout region. Restores parent layout state.
      */
     public function end(): void
     {
-        // Note: We no longer suppress/unsuppress input here.
-        // Game code can check isAnyHovered() and suppress manually if needed.
+        $wasHovered = $this->anyHovered;
+
+        if (!empty($this->layoutStack)) {
+            $prev = array_pop($this->layoutStack);
+            $this->cursorX = $prev['x'];
+            $this->cursorY = $prev['y'];
+            $this->regionWidth = $prev['w'];
+            $this->flow = $prev['flow'];
+            // Propagate hover state to parent
+            $this->anyHovered = $prev['hovered'] || $wasHovered;
+        }
     }
 
     // ── Widgets ──────────────────────────────────────────────────
@@ -96,6 +123,7 @@ class UIContext
     {
         $color ??= $this->style->textColor;
         $h = $this->style->fontSize + $this->style->padding * 2;
+        $w = mb_strlen($text) * $this->style->fontSize * 0.55 + $this->style->padding * 2;
 
         $this->renderer->drawText(
             $text,
@@ -105,17 +133,30 @@ class UIContext
             $color,
         );
 
-        $this->advance($h);
+        $this->advance($this->flow === 'horizontal' ? $w : $h);
     }
 
     /**
      * Clickable button. Returns true on the frame it was clicked.
+     *
+     * @param float $width Override width (0 = auto: regionWidth in vertical, text-fit in horizontal)
      */
-    public function button(string $id, string $label): bool
+    public function button(string $id, string $label, float $width = 0.0): bool
     {
         $s = $this->style;
         $h = $s->fontSize + $s->padding * 2;
-        $rect = new Rect($this->cursorX, $this->cursorY, $this->regionWidth, $h);
+
+        // Calculate button width
+        if ($width > 0.0) {
+            $w = $width;
+        } elseif ($this->flow === 'horizontal') {
+            // Auto-size to text in horizontal mode
+            $w = mb_strlen($label) * $s->fontSize * 0.55 + $s->padding * 2;
+        } else {
+            $w = $this->regionWidth;
+        }
+
+        $rect = new Rect($this->cursorX, $this->cursorY, $w, $h);
 
         $hovered = $this->isHovered($rect);
         $clicked = false;
@@ -134,7 +175,6 @@ class UIContext
                 $this->activeWidget = '';
             }
         } else {
-            // Release outside cancels active state
             if ($this->activeWidget === $id && !$this->input->isMouseButtonDown(0)) {
                 $this->activeWidget = '';
             }
@@ -143,7 +183,7 @@ class UIContext
         $bg = $pressing ? $s->activeColor
             : ($hovered ? $s->hoverColor : $s->backgroundColor);
 
-        $this->renderer->drawRoundedRect($rect->x, $rect->y, $rect->width, $rect->height, $s->borderRadius, $bg);
+        $this->renderer->drawRoundedRect($rect->x, $rect->y, $w, $h, $s->borderRadius, $bg);
         $this->renderer->drawText(
             $label,
             $rect->x + $s->padding,
@@ -152,7 +192,7 @@ class UIContext
             $s->textColor,
         );
 
-        $this->advance($h);
+        $this->advance($this->flow === 'horizontal' ? $w : $h);
         return $clicked;
     }
 
@@ -408,11 +448,12 @@ class UIContext
     }
 
     /**
-     * Vertical spacing.
+     * Spacing in the current flow direction.
+     * In vertical flow: adds vertical space. In horizontal flow: adds horizontal space.
      */
-    public function space(float $height = 0.0): void
+    public function space(float $size = 0.0): void
     {
-        $this->advance($height > 0.0 ? $height : $this->style->itemSpacing * 2);
+        $this->advance($size > 0.0 ? $size : $this->style->itemSpacing * 2);
     }
 
     /**
@@ -491,8 +532,19 @@ class UIContext
         return $rect->contains($adjustedMouse);
     }
 
-    private function advance(float $height): void
+    /**
+     * Advance the cursor after rendering a widget.
+     * In vertical flow: moves Y down. In horizontal flow: moves X right.
+     *
+     * @param float $size The size to advance (height in vertical, width in horizontal).
+     *                    In horizontal mode, this is treated as the widget width.
+     */
+    private function advance(float $size): void
     {
-        $this->cursorY += $height + $this->style->itemSpacing;
+        if ($this->flow === 'horizontal') {
+            $this->cursorX += $size + $this->style->itemSpacing;
+        } else {
+            $this->cursorY += $size + $this->style->itemSpacing;
+        }
     }
 }
