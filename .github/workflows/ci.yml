@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: ['*']
+
+jobs:
+  tests:
+    name: PHP ${{ matrix.php }} — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.2'
+            os: ubuntu-latest
+          - php: '8.3'
+            os: ubuntu-latest
+          - php: '8.4'
+            os: ubuntu-latest
+          - php: '8.4'
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --ignore-platform-reqs
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit
+
+  tests-gpu:
+    name: PHP ${{ matrix.php }} — GPU (xvfb)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            php${{ matrix.php }}-dev \
+            build-essential cmake \
+            libglfw3-dev xvfb \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Build php-glfw
+        run: |
+          git clone https://github.com/mario-deluna/php-glfw
+          cd php-glfw
+          sudo phpize
+          ./configure --enable-glfw
+          make -j$(nproc)
+          sudo make install
+          cd ..
+          echo 'extension=glfw.so' | sudo tee -a $(php -r "echo php_ini_loaded_file();")
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --ignore-platform-reqs
+
+      - name: Run PHPUnit with GPU
+        run: xvfb-run --auto-servernum vendor/bin/phpunit
+
+  static-analysis:
+    name: PHPStan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --ignore-platform-reqs
+
+      - name: Run PHPStan
+        run: vendor/bin/phpstan analyse --error-format=github
+
+  vrt-snapshots:
+    name: VRT snapshot check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --ignore-platform-reqs
+
+      - name: Run VRT tests
+        run: vendor/bin/phpunit tests/Testing/
+
+      - name: Check for uncommitted snapshot changes
+        run: |
+          if [ -n "$(git status --porcelain tests/)" ]; then
+            echo "::error::VRT snapshots are out of date. Run tests locally and commit updated snapshots."
+            git diff --stat tests/
+            exit 1
+          fi
