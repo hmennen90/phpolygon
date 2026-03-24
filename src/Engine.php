@@ -9,11 +9,15 @@ use PHPolygon\ECS\World;
 use PHPolygon\Event\EventDispatcher;
 use PHPolygon\Locale\LocaleManager;
 use PHPolygon\Rendering\Camera2D;
+use PHPolygon\Rendering\NullRenderer2D;
 use PHPolygon\Rendering\Renderer2D;
+use PHPolygon\Rendering\Renderer2DInterface;
 use PHPolygon\Rendering\TextureManager;
+use PHPolygon\Testing\NullTextureManager;
 use PHPolygon\Runtime\Clock;
 use PHPolygon\Runtime\GameLoop;
 use PHPolygon\Runtime\Input;
+use PHPolygon\Runtime\NullWindow;
 use PHPolygon\Runtime\Window;
 use PHPolygon\SaveGame\SaveManager;
 use PHPolygon\Scene\SceneManager;
@@ -33,9 +37,10 @@ class Engine
     public readonly LocaleManager $locale;
     public readonly SaveManager $saves;
 
-    public Renderer2D $renderer2D;
+    public Renderer2DInterface $renderer2D;
 
     private bool $running = false;
+    private bool $headless;
 
     /** @var callable|null */
     private $onUpdate = null;
@@ -49,25 +54,33 @@ class Engine
     public function __construct(
         private readonly EngineConfig $config = new EngineConfig(),
     ) {
+        $this->headless = $config->headless;
         $this->world = new World();
         $this->input = new Input();
         $this->events = new EventDispatcher();
         $this->clock = new Clock();
         $this->camera2D = new Camera2D($config->width, $config->height);
-        $this->textures = new TextureManager($config->assetsPath);
+        $this->textures = $this->headless
+            ? new NullTextureManager($config->assetsPath)
+            : new TextureManager($config->assetsPath);
         $this->gameLoop = new GameLoop($config->targetTickRate);
         $this->scenes = new SceneManager($this);
         $this->audio = new AudioManager();
         $this->locale = new LocaleManager($config->defaultLocale, $config->fallbackLocale);
         $this->saves = new SaveManager($config->savePath, $config->maxSaveSlots);
 
-        $this->window = new Window(
-            $config->width,
-            $config->height,
-            $config->title,
-            $config->vsync,
-            $config->resizable,
-        );
+        if ($this->headless) {
+            $this->window = new NullWindow($config->width, $config->height, $config->title);
+            $this->renderer2D = new NullRenderer2D($config->width, $config->height);
+        } else {
+            $this->window = new Window(
+                $config->width,
+                $config->height,
+                $config->title,
+                $config->vsync,
+                $config->resizable,
+            );
+        }
     }
 
     public function onUpdate(callable $callback): self
@@ -93,7 +106,9 @@ class Engine
         $this->window->initialize($this->input);
 
         // Create Renderer2D after window is initialized (needs GL context)
-        $this->renderer2D = new Renderer2D($this->window);
+        if (!$this->headless) {
+            $this->renderer2D = new Renderer2D($this->window);
+        }
 
         if ($this->onInit !== null) {
             ($this->onInit)($this);

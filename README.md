@@ -37,10 +37,24 @@ game logic are generated and iterated on through AI-assisted workflows.
   raycasting, trigger/collision events
 - **Input mapping** — Action-based system with named bindings (`jump`, `shoot`)
   instead of raw key codes, axis support for movement
-- **Audio** — Pluggable backend interface with AudioSource component
+- **Audio** — AudioManager with channel-based mixing (SFX, Music, UI, Ambient,
+  Voice), per-channel volume/mute, pluggable backend interface
+- **Localization** — LocaleManager with JSON translation files, dot-notation keys,
+  placeholder replacement (`:param`), fallback locale
+- **Save system** — Slot-based SaveManager with metadata, play time tracking,
+  JSON persistence
+- **UI system** — Dual-paradigm: immediate-mode (UIContext) for debug overlays,
+  retained-mode (Widget tree) for complex UIs with measure/layout/draw pipeline
 - **Editor infrastructure** — Inspector metadata extraction via Reflection,
   component registry with category grouping, SceneDocument with undo/redo,
-  command bus for editor operations
+  command bus for editor operations, NativePHP desktop app with Vue 3 SPA
+- **Build system** — 7-phase pipeline producing standalone executables: PHAR
+  creation, static PHP binary (micro.sfx), platform packaging (macOS .app,
+  Linux, Windows)
+- **Headless mode** — Full engine without GPU: `EngineConfig(headless: true)`
+  swaps in NullWindow, NullRenderer2D, NullTextureManager for CI/testing
+- **Visual regression testing** — Playwright-style VRT with GD software renderer,
+  YIQ pixel comparison, automatic snapshot management, diff image generation
 - **Math primitives** — Vec2, Vec3, Mat3, Rect as immutable value objects
 - **Rendering** — NanoVG 2D renderer, Camera2D, TextureManager, SpriteSheet
 
@@ -52,12 +66,17 @@ PHPolygon\
 ├── Scene\            Scene, SceneManager, SceneBuilder, Prefabs, Transpiler
 ├── Component\        Transform2D, SpriteRenderer, RigidBody2D, BoxCollider2D, ...
 ├── System\           Physics2DSystem, Renderer2DSystem, AudioSystem, InputMapSystem
-├── Rendering\        Renderer2D (NanoVG), Camera2D, Texture, Color
-├── Runtime\          Window, GameLoop, Input, Clock
+├── Rendering\        Renderer2D (NanoVG), NullRenderer2D, Camera2D, Texture, Color
+├── Runtime\          Window, NullWindow, GameLoop, Input, Clock
 ├── Physics\          Collision2D, RaycastHit2D
 ├── Input\            InputMap, InputAction, InputBinding
-├── Audio\            AudioBackendInterface, AudioClip
+├── Audio\            AudioManager, AudioChannel, AudioBackendInterface
+├── Locale\           LocaleManager (i18n with JSON files, fallback locale)
+├── SaveGame\         SaveManager, SaveSlotInfo (slot-based persistence)
+├── UI\               UIContext (immediate), Widget tree (retained), UIStyle
 ├── Math\             Vec2, Vec3, Mat3, Rect
+├── Build\            GameBuilder, PharBuilder, StaticPhpResolver, PlatformPackager
+├── Testing\          GdRenderer2D, ScreenshotComparer, VisualTestCase
 ├── Editor\           Inspector, Registry, Commands, SceneDocument, ProjectManifest
 └── Event\            EventDispatcher, scene/collision/trigger events
 ```
@@ -175,6 +194,70 @@ Compute shader generates animated plasma pattern, presented via swapchain.
 
 Rotating 3D pyramid with perspective projection, push constants, swapchain presentation.
 
+## Build System
+
+Compile a game project into a standalone executable — no PHP installation
+required on the target machine.
+
+```bash
+# Build for current platform
+php -d phar.readonly=0 vendor/bin/phpolygon build
+
+# Build for specific target
+php -d phar.readonly=0 vendor/bin/phpolygon build macos-arm64
+
+# Build all platforms
+php -d phar.readonly=0 vendor/bin/phpolygon build all
+
+# Preview configuration
+php vendor/bin/phpolygon build --dry-run
+```
+
+The build pipeline creates a PHAR archive, resolves a static PHP binary
+(micro.sfx), concatenates them into a single executable, and packages it
+for the target platform (macOS `.app` bundle, Linux directory, Windows `.exe`).
+
+Configure via `build.json` in your game project root. See CLAUDE.md for
+full configuration reference.
+
+## Headless Mode
+
+Run the engine without a GPU or display server — useful for CI, testing,
+and tooling:
+
+```php
+$engine = new Engine(new EngineConfig(headless: true));
+// All subsystems work: ECS, Scenes, Events, Audio, Locale, Saves
+// Window → NullWindow, Renderer → NullRenderer2D, Textures → NullTextureManager
+```
+
+## Visual Regression Testing
+
+Playwright-style snapshot testing with a GD software renderer:
+
+```php
+class MyGameTest extends TestCase {
+    use VisualTestCase;
+
+    public function testMainMenu(): void {
+        [$engine, $renderer] = $this->renderScene(MainMenuScene::class, 'main-menu');
+        $this->assertScreenshot($renderer, 'main-menu');
+    }
+}
+```
+
+First run saves a reference screenshot. Subsequent runs compare pixel-by-pixel
+using YIQ color space. On failure, generates `*.actual.png` and `*.diff.png`
+for visual inspection.
+
+```bash
+# Run VRT tests
+vendor/bin/phpunit tests/
+
+# Update snapshots after intentional changes
+PHPOLYGON_UPDATE_SNAPSHOTS=1 vendor/bin/phpunit
+```
+
 ## Roadmap
 
 | Phase | Description | Status |
@@ -182,19 +265,22 @@ Rotating 3D pyramid with perspective projection, push constants, swapchain prese
 | 1 | Engine foundation — ECS, runtime, rendering, math | Done |
 | 2 | Scene system — SceneManager, hierarchy, prefabs, transpiler | Done |
 | 3 | Game systems — physics, collision, input mapping, audio | Done |
-| 4 | Editor infrastructure — inspector, registry, commands | Done |
-| 5 | First game — engine validation through real-world usage | Next |
-| 6 | Vulkan 3D — Renderer3D, command buffers, 3D pipeline | Planned |
+| 4 | Editor infrastructure — inspector, registry, commands, NativePHP desktop app | Done |
+| 5 | Engine services — localization, save system, audio manager, UI system | Done |
+| 6 | Build & test — build pipeline, headless mode, visual regression testing | Done |
+| 7 | First game — engine validation through real-world usage | Next |
+| 8 | Vulkan 3D — Renderer3D, command buffers, 3D pipeline | Planned |
 
 ## Testing
 
 ```bash
 composer install
-./vendor/bin/phpunit
+vendor/bin/phpunit
 ```
 
-132 tests, 311 assertions across ECS, math, serialization, scene system,
-physics, input, audio, and editor infrastructure.
+363 tests, 789 assertions across ECS, math, serialization, scene system,
+physics, input, audio, localization, save system, UI, build pipeline,
+headless engine, and visual regression testing.
 
 ## License
 

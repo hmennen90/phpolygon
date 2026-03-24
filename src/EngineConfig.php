@@ -18,5 +18,6 @@ class EngineConfig
         public readonly string $fallbackLocale = 'en',
         public readonly string $savePath = 'saves',
         public readonly int $maxSaveSlots = 10,
+        public readonly bool $headless = false,
     ) {}
 }

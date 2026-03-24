@@ -155,3 +155,208 @@ Claude Code is the primary authoring tool. When generating content:
 7. **Mods** — `mod.json` + PHP class implementing `ModInterface` + assets.
 
 Every generated file is a Git commit. Every step is reviewable. No black-box state.
+
+---
+
+## Build system
+
+The build pipeline (`src/Build/`) compiles a game project into a standalone
+executable. CLI entry point: `bin/phpolygon`.
+
+### Usage
+
+```bash
+php -d phar.readonly=0 vendor/bin/phpolygon build                # auto-detect platform
+php -d phar.readonly=0 vendor/bin/phpolygon build macos-arm64     # specific target
+php -d phar.readonly=0 vendor/bin/phpolygon build all              # every platform
+php vendor/bin/phpolygon build --dry-run                           # show config only
+```
+
+### 7-phase pipeline
+
+1. **Vendor** — `composer update --no-dev` (restored after build)
+2. **Stage** — copy src/, vendor/, assets/, resources/ into temp dir, resolve
+   symlinks, exclude tests/docs/editor via glob patterns
+3. **PHAR** — create game.phar with a custom stub that handles micro SAPI
+   detection, macOS .app bundle paths, resource extraction, and engine bootstrap
+4. **micro.sfx** — resolve static PHP binary (explicit path → cache
+   `~/.phpolygon/build-cache/` → download from GitHub Release)
+5. **Combine** — concatenate micro.sfx + game.phar into single executable
+6. **Package** — platform-specific: macOS `.app` bundle with Info.plist,
+   Linux/Windows flat directory
+7. **Report** — PHAR size, binary size, bundle size
+
+### Configuration
+
+`build.json` in game project root (optional, falls back to composer.json):
+
+```json
+{
+  "name": "MyGame",
+  "identifier": "com.studio.mygame",
+  "version": "1.0.0",
+  "entry": "game.php",
+  "run": "\\App\\Game::start();",
+  "php": { "extensions": ["glfw", "mbstring", "zip", "phar"] },
+  "phar": { "exclude": ["**/tests", "**/docs"] },
+  "resources": { "external": ["resources/audio"] },
+  "platforms": {
+    "macos": { "icon": "icon.icns", "minimumVersion": "12.0" }
+  }
+}
+```
+
+### Build classes
+
+| Class | Purpose |
+|---|---|
+| `BuildConfig` | Loads build.json + composer.json, provides all settings |
+| `PharBuilder` | Stages sources, builds PHAR with custom stub |
+| `StaticPhpResolver` | Finds/downloads/caches micro.sfx binary |
+| `PlatformPackager` | Creates .app bundle, Linux dir, Windows .exe |
+| `GameBuilder` | Orchestrates the 7-phase pipeline |
+
+### PHAR stub constants
+
+The stub defines these at runtime:
+- `PHPOLYGON_PATH_ROOT` — resource base directory
+- `PHPOLYGON_PATH_ASSETS` — extracted assets
+- `PHPOLYGON_PATH_RESOURCES` — extracted resources
+- `PHPOLYGON_PATH_SAVES` — user save data
+- `PHPOLYGON_PATH_MODS` — mod directory
+
+---
+
+## Headless mode
+
+The engine can run without a GPU, display server, or OpenGL context.
+This enables CI testing, scene validation, and visual regression testing.
+
+```php
+$engine = new Engine(new EngineConfig(headless: true));
+// All subsystems work: ECS, Scenes, Events, Audio, Locale, Saves
+```
+
+### How it works
+
+| Normal mode | Headless mode |
+|---|---|
+| `Window` (GLFW) | `NullWindow` (no-op, configurable dimensions) |
+| `Renderer2D` (NanoVG/OpenGL) | `NullRenderer2D` (accepts all draws, no output) |
+| `TextureManager` (GL textures) | `NullTextureManager` (dummy textures with dimensions) |
+
+The `headless` flag in `EngineConfig` switches all three automatically.
+`NullWindow` extends `Window`, `NullTextureManager` extends `TextureManager` —
+existing code that type-hints against the base classes works unchanged.
+
+### Null objects
+
+- `NullWindow` — returns configured width/height, `shouldClose()` returns false
+  until `requestClose()` is called, all other methods are no-ops
+- `NullRenderer2D` — implements `Renderer2DInterface`, every draw method is a no-op
+- `NullTextureManager` — `load()` auto-creates dummy `Texture` objects with
+  `glId: 0` and configurable width/height; `register(id, w, h)` pre-registers
+  textures for tests that need specific dimensions
+
+---
+
+## Testing and visual regression testing (VRT)
+
+### Test infrastructure (`src/Testing/`)
+
+| Class | Purpose |
+|---|---|
+| `GdRenderer2D` | Software renderer using PHP GD — draws to `GdImage`, no GPU |
+| `ScreenshotComparer` | Pixel-level comparison using YIQ color space (Pixelmatch algorithm) |
+| `ComparisonResult` | Result object with `passes()`, tolerances, diff path |
+| `VisualTestCase` | PHPUnit trait — Playwright-style `assertScreenshot()` |
+| `NullTextureManager` | Headless texture stubs for scene rendering tests |
+
+### VRT workflow (Playwright-style)
+
+```php
+class MyGameTest extends TestCase {
+    use VisualTestCase;
+
+    public function testMainMenu(): void {
+        $renderer = new GdRenderer2D(800, 600);
+        $renderer->beginFrame();
+        // ... draw scene ...
+        $renderer->endFrame();
+
+        $this->assertScreenshot($renderer, 'main-menu');
+    }
+}
+```
+
+- **First run:** saves reference screenshot → test passes
+- **Subsequent runs:** compares against reference → fails on visual diff
+- **Update snapshots:** `PHPOLYGON_UPDATE_SNAPSHOTS=1 vendor/bin/phpunit`
+
+### Snapshot file structure
+
+```
+tests/MyTest.php
+tests/MyTest.php-snapshots/
+├── main-menu.png                    ← reference (no platform suffix by default)
+├── main-menu.actual.png             ← only on failure
+└── main-menu.diff.png               ← only on failure (red = mismatch)
+```
+
+Default: **no platform suffix**. Override `usePlatformSuffix()` → `true` for
+font-dependent tests, which produces `name-gd-darwin.png` / `name-gd-linux.png`.
+
+### Scene rendering tests
+
+Use `renderScene()` or `createVisualTestEngine()` to load game scenes headlessly:
+
+```php
+// Quick: load scene, tick, render, screenshot
+[$engine, $renderer] = $this->renderScene(MainMenuScene::class, 'main-menu');
+$this->assertScreenshot($renderer, 'main-menu');
+
+// Full control: register textures, custom camera, multiple ticks
+[$engine, $renderer] = $this->createVisualTestEngine(800, 600);
+$tm = $engine->textures; // NullTextureManager in headless
+$tm->register('player', 32, 48);
+$tm->register('ground', 800, 100);
+// ... load scene, add render system, tick, render ...
+$this->assertScreenshot($renderer, 'gameplay');
+```
+
+### Comparison parameters
+
+```php
+$this->assertScreenshot($renderer, 'name',
+    threshold: 0.1,          // per-pixel YIQ tolerance (0.0–1.0)
+    maxDiffPixels: 50,       // absolute pixel count tolerance
+    maxDiffPixelRatio: 0.01, // ratio tolerance (1% of pixels)
+    mask: [                  // ignore dynamic regions (filled magenta)
+        ['x' => 10, 'y' => 10, 'w' => 100, 'h' => 20],
+    ],
+);
+```
+
+### Fonts
+
+```php
+// Place .ttf files in resources/fonts/
+$renderer->loadFont('inter', 'resources/fonts/Inter-Regular.ttf');
+$renderer->setFont('inter');
+$renderer->drawText('Score: 42,000', 20, 20, 24, Color::white());
+```
+
+Works identically for `Renderer2D` (NanoVG) and `GdRenderer2D` (GD/FreeType).
+Font rendering may differ between platforms — use `usePlatformSuffix() → true`
+for font-dependent VRT tests.
+
+### GdRenderer2D capabilities
+
+The GD software renderer supports: filled/outlined rectangles, rounded rects,
+circles, lines, text (TrueType via `imagettftext`), centered text, word-wrapped
+text, transform stack (`pushTransform`/`popTransform` via Mat3), scissor stack,
+and sprite placeholders (grey rectangles with outlines for textures).
+
+It does **not** produce pixel-identical output to the OpenGL `Renderer2D` — it is
+a structural approximation for layout and regression testing, not a reference
+renderer.
