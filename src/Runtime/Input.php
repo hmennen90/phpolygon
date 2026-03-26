@@ -6,7 +6,7 @@ namespace PHPolygon\Runtime;
 
 use PHPolygon\Math\Vec2;
 
-class Input
+class Input implements InputInterface
 {
     /** @var array<int, bool> Current frame key state */
     private array $keysDown = [];

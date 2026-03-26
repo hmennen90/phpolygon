@@ -15,7 +15,7 @@ use PHPolygon\Event\SceneUnloaded;
 use PHPolygon\Event\SceneUnloading;
 use RuntimeException;
 
-class SceneManager
+class SceneManager implements SceneManagerInterface
 {
     /** @var array<string, class-string<Scene>> */
     private array $registry = [];

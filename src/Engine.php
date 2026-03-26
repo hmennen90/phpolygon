@@ -17,22 +17,24 @@ use PHPolygon\Testing\NullTextureManager;
 use PHPolygon\Runtime\Clock;
 use PHPolygon\Runtime\GameLoop;
 use PHPolygon\Runtime\Input;
+use PHPolygon\Runtime\InputInterface;
 use PHPolygon\Runtime\NullWindow;
 use PHPolygon\Runtime\Window;
 use PHPolygon\SaveGame\SaveManager;
 use PHPolygon\Scene\SceneManager;
+use PHPolygon\Scene\SceneManagerInterface;
 
 class Engine
 {
     public readonly World $world;
     public readonly Window $window;
-    public readonly Input $input;
+    public readonly InputInterface $input;
     public readonly Camera2D $camera2D;
     public readonly TextureManager $textures;
     public readonly EventDispatcher $events;
     public readonly GameLoop $gameLoop;
     public readonly Clock $clock;
-    public readonly SceneManager $scenes;
+    public readonly SceneManagerInterface $scenes;
     public readonly AudioManager $audio;
     public readonly LocaleManager $locale;
     public readonly SaveManager $saves;
@@ -108,6 +110,14 @@ class Engine
         // Create Renderer2D after window is initialized (needs GL context)
         if (!$this->headless) {
             $this->renderer2D = new Renderer2D($this->window);
+
+            // Auto-load bundled fonts so text renders without manual setup
+            $fontDir = __DIR__ . '/../resources/fonts';
+            if (is_dir($fontDir)) {
+                $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
+                $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
+                $this->renderer2D->setFont('regular');
+            }
         }
 
         if ($this->onInit !== null) {
