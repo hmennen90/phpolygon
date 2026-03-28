@@ -24,6 +24,16 @@ use PHPolygon\Rendering\Command\SetSkybox;
  */
 class OpenGLRenderer3D implements Renderer3DInterface
 {
+    private const GL_ERROR_NAMES = [
+        0x0500 => 'GL_INVALID_ENUM',
+        0x0501 => 'GL_INVALID_VALUE',
+        0x0502 => 'GL_INVALID_OPERATION',
+        0x0503 => 'GL_STACK_OVERFLOW',
+        0x0504 => 'GL_STACK_UNDERFLOW',
+        0x0505 => 'GL_OUT_OF_MEMORY',
+        0x0506 => 'GL_INVALID_FRAMEBUFFER_OPERATION',
+    ];
+
     private int $width;
     private int $height;
 
@@ -39,8 +49,14 @@ class OpenGLRenderer3D implements Renderer3DInterface
     /** @var array<string, int> VAO for instanced draws (expanded, non-indexed) */
     private array $instancedVaoCache = [];
 
-    /** @var array<string, int> Instance VBO per mesh (for instanced rendering) */
+    /** @var array<string, int> Instance VBO per mesh (shared, for instanced rendering) */
     private array $instanceVboCache = [];
+
+    /** @var array<string, FloatBuffer> Cached serialized matrices per mesh:material (static only) */
+    private array $staticFloatBufferCache = [];
+
+    /** @var array<string, int> Cached instance count per mesh:material (static only) */
+    private array $staticInstanceCountCache = [];
 
 
     private int $shaderProgram = 0;
@@ -102,6 +118,15 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
     public function render(RenderCommandList $commandList): void
     {
+        // Ensure 3D GL state — beginFrame() is not reliably called by the engine
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glEnable(GL_MULTISAMPLE);
+        glDisable(GL_CULL_FACE);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        $this->pointLightCount = 0;
+        $this->pointLights     = [];
+
         glUseProgram($this->shaderProgram);
 
         // Defaults
@@ -119,6 +144,8 @@ class OpenGLRenderer3D implements Renderer3DInterface
         if ($this->useInstancingLoc >= 0) {
             glUniform1i($this->useInstancingLoc, 0);
         }
+
+        $this->checkGLError('render() setup');
 
         // Pass 1: collect non-draw commands
         foreach ($commandList->getCommands() as $command) {
@@ -181,7 +208,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             } elseif ($command instanceof DrawMeshInstanced) {
                 $mat = MaterialRegistry::get($command->materialId);
                 if ($mat === null || $mat->alpha >= 1.0) {
-                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices);
+                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices, $command->isStatic);
                 }
             }
         }
@@ -199,7 +226,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             } elseif ($command instanceof DrawMeshInstanced) {
                 $mat = MaterialRegistry::get($command->materialId);
                 if ($mat !== null && $mat->alpha < 1.0) {
-                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices);
+                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices, $command->isStatic);
                 }
             }
         }
@@ -211,6 +238,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             $this->renderSkybox($this->pendingSkyboxId);
             $this->pendingSkyboxId = null;
         }
+
     }
 
     /**
@@ -237,16 +265,22 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
         glBindVertexArray($this->vaoCache[$meshId]);
         glDrawElements(GL_TRIANGLES, $this->indexCountCache[$meshId], GL_UNSIGNED_INT, 0);
+        $this->checkGLError("drawMeshCommand({$meshId}, {$materialId})");
         glBindVertexArray(0);
     }
 
     /**
      * Draw multiple instances of the same mesh in a single GPU call.
-     * Uses glDrawArraysInstanced with per-instance model matrix attributes.
+     * Uses the original shared-VAO architecture (one VAO + one VBO per meshId).
+     *
+     * When $isStatic is true, the PHP-side matrix serialization is cached —
+     * the pre-built FloatBuffer is reused, skipping the expensive foreach loop.
+     * glBufferData is still called each frame (cheap GPU upload) but the PHP
+     * overhead of iterating 260k+ floats is eliminated.
      *
      * @param Mat4[] $matrices
      */
-    private function drawMeshInstancedCommand(string $meshId, string $materialId, array $matrices): void
+    private function drawMeshInstancedCommand(string $meshId, string $materialId, array $matrices, bool $isStatic = false): void
     {
         if (empty($matrices)) {
             return;
@@ -257,24 +291,36 @@ class OpenGLRenderer3D implements Renderer3DInterface
             return;
         }
 
-        // Ensure instanced VAO exists (expanded, non-indexed)
         if (!isset($this->instancedVaoCache[$meshId])) {
             $this->uploadInstancedMesh($meshId, $meshData);
         }
 
-        $instanceCount = count($matrices);
+        $cacheKey = $meshId . ':' . $materialId;
+        $fromCache = false;
 
-        // Serialize all matrices into flat float array
-        $floats = [];
-        foreach ($matrices as $matrix) {
-            foreach ($matrix->toArray() as $v) {
-                $floats[] = $v;
+        if ($isStatic && isset($this->staticFloatBufferCache[$cacheKey])) {
+            $buffer = $this->staticFloatBufferCache[$cacheKey];
+            $instanceCount = $this->staticInstanceCountCache[$cacheKey];
+            $fromCache = true;
+        } else {
+            $floats = [];
+            foreach ($matrices as $matrix) {
+                foreach ($matrix->toArray() as $v) {
+                    $floats[] = $v;
+                }
+            }
+            $buffer = new FloatBuffer($floats);
+            $instanceCount = count($matrices);
+
+            if ($isStatic) {
+                $this->staticFloatBufferCache[$cacheKey] = $buffer;
+                $this->staticInstanceCountCache[$cacheKey] = $instanceCount;
             }
         }
 
         glBindVertexArray($this->instancedVaoCache[$meshId]);
 
-        // Update instance buffer
+        // Create or reuse shared instance VBO
         if (!isset($this->instanceVboCache[$meshId])) {
             $vbo = 0;
             glGenBuffers(1, $vbo);
@@ -294,8 +340,9 @@ class OpenGLRenderer3D implements Renderer3DInterface
             }
         }
 
+        // Upload instance data (cheap GPU operation — FloatBuffer already built)
         glBindBuffer(GL_ARRAY_BUFFER, $this->instanceVboCache[$meshId]);
-        glBufferData(GL_ARRAY_BUFFER, new FloatBuffer($floats), GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, $buffer, GL_DYNAMIC_DRAW);
 
         // Enable instancing in shader
         if ($this->useInstancingLoc >= 0) {
@@ -310,6 +357,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             $this->expandedVertexCount[$meshId],
             $instanceCount,
         );
+        $this->checkGLError("drawMeshInstanced({$meshId}, {$materialId}, n={$instanceCount})");
 
         if ($this->useInstancingLoc >= 0) {
             glUniform1i($this->useInstancingLoc, 0);
@@ -362,10 +410,12 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glVertexAttribPointer(2, 2, GL_FLOAT, false, $stride, 6 * 4);
         glEnableVertexAttribArray(2);
 
+        $this->checkGLError("uploadInstancedMesh({$meshId})");
+
         glBindVertexArray(0);
 
         $this->instancedVaoCache[$meshId] = $vao;
-        $this->expandedVertexCount[$meshId] = $indexCount; // one vertex per index
+        $this->expandedVertexCount[$meshId] = $indexCount;
     }
 
     private function applyMaterial(string $materialId): void
@@ -433,6 +483,8 @@ class OpenGLRenderer3D implements Renderer3DInterface
         }
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, $ebo);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, new IntBuffer($meshData->indices), GL_STATIC_DRAW);
+
+        $this->checkGLError("uploadMesh({$meshId})");
 
         glBindVertexArray(0);
 
@@ -690,5 +742,20 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
         glDepthFunc(GL_LESS);
         glUseProgram($this->shaderProgram);
+    }
+
+    /**
+     * Check for OpenGL errors and log them to stderr.
+     * Drains all pending errors. Returns true if any error was found.
+     */
+    private function checkGLError(string $context): bool
+    {
+        $hadError = false;
+        while (($err = glGetError()) !== 0) {
+            $name = self::GL_ERROR_NAMES[$err] ?? sprintf('0x%04X', $err);
+            fwrite(STDERR, "[GL ERROR] {$name} in {$context}\n");
+            $hadError = true;
+        }
+        return $hadError;
     }
 }
