@@ -7,14 +7,12 @@ namespace PHPolygon\System;
 use PHPolygon\Component\InstancedTerrain;
 use PHPolygon\ECS\AbstractSystem;
 use PHPolygon\ECS\World;
-use PHPolygon\Rendering\Command\DrawMesh;
 use PHPolygon\Rendering\Command\DrawMeshInstanced;
 use PHPolygon\Rendering\RenderCommandList;
 
 /**
  * Renders instanced terrain using batched DrawMeshInstanced commands.
- * Each material group becomes one GPU draw call — thousands of grains
- * rendered efficiently in a single pass per material.
+ * Each material group becomes one GPU draw call via glDrawElementsInstanced.
  */
 class InstancedTerrainSystem extends AbstractSystem
 {
@@ -22,7 +20,7 @@ class InstancedTerrainSystem extends AbstractSystem
         private readonly RenderCommandList $commandList,
     ) {}
 
-    public function update(World $world, float $dt): void
+    public function render(World $world): void
     {
         static $frameCount = 0;
 
@@ -37,13 +35,11 @@ class InstancedTerrainSystem extends AbstractSystem
             foreach ($terrain->matricesByMaterial as $materialId => $matrices) {
                 $materialCount++;
                 $totalMatrices += count($matrices);
-                foreach ($matrices as $matrix) {
-                    $this->commandList->add(new DrawMesh(
-                        meshId: $terrain->meshId,
-                        materialId: $materialId,
-                        modelMatrix: $matrix,
-                    ));
-                }
+                $this->commandList->add(new DrawMeshInstanced(
+                    meshId: $terrain->meshId,
+                    materialId: $materialId,
+                    matrices: $matrices,
+                ));
             }
         }
 

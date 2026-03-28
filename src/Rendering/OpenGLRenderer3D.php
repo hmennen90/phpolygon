@@ -20,18 +20,28 @@ use PHPolygon\Rendering\Command\SetSkybox;
 
 /**
  * OpenGL 4.1 3D renderer. Translates a RenderCommandList into GL draw calls.
- * Requires an active GLFW/GL context before construction.
+ * Supports GPU instancing via glDrawElementsInstanced for DrawMeshInstanced commands.
  */
 class OpenGLRenderer3D implements Renderer3DInterface
 {
     private int $width;
     private int $height;
 
-    /** @var array<string, int> */
+    /** @var array<string, int> Mesh VAO cache */
     private array $vaoCache = [];
 
-    /** @var array<string, int> */
+    /** @var array<string, int> Mesh index count cache */
     private array $indexCountCache = [];
+
+    /** @var array<string, int> Expanded vertex count for instanced draws (non-indexed) */
+    private array $expandedVertexCount = [];
+
+    /** @var array<string, int> VAO for instanced draws (expanded, non-indexed) */
+    private array $instancedVaoCache = [];
+
+    /** @var array<string, int> Instance VBO per mesh (for instanced rendering) */
+    private array $instanceVboCache = [];
+
 
     private int $shaderProgram = 0;
     private int $skyboxShaderProgram = 0;
@@ -40,7 +50,6 @@ class OpenGLRenderer3D implements Renderer3DInterface
     /** @var array<string, int> GL cubemap texture IDs */
     private array $cubemapCache = [];
 
-    /** Accumulated per-frame point lights (capped at 8) */
     private int $pointLightCount = 0;
 
     /** @var array<int, array{pos: float[], color: float[], intensity: float, radius: float}> */
@@ -48,9 +57,11 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
     private ?string $pendingSkyboxId = null;
 
-    /** Cached view/projection matrices for skybox rendering */
     private ?Mat4 $currentViewMatrix = null;
     private ?Mat4 $currentProjectionMatrix = null;
+
+    /** Cached uniform location for u_use_instancing */
+    private int $useInstancingLoc = -1;
 
     public function __construct(int $width = 1280, int $height = 720)
     {
@@ -58,6 +69,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
         $this->height = $height;
         $this->initShaders();
         $this->initSkybox();
+        $this->useInstancingLoc = glGetUniformLocation($this->shaderProgram, 'u_use_instancing');
     }
 
     public function beginFrame(): void
@@ -92,11 +104,9 @@ class OpenGLRenderer3D implements Renderer3DInterface
     {
         glUseProgram($this->shaderProgram);
 
-        // Set default ambient
+        // Defaults
         $this->setUniformVec3('u_ambient_color', [1.0, 1.0, 1.0]);
         $this->setUniformFloat('u_ambient_intensity', 0.1);
-
-        // Defaults for lights and fog
         $this->setUniformVec3('u_dir_light_direction', [0.0, -1.0, 0.0]);
         $this->setUniformVec3('u_dir_light_color', [1.0, 1.0, 1.0]);
         $this->setUniformFloat('u_dir_light_intensity', 0.0);
@@ -104,6 +114,11 @@ class OpenGLRenderer3D implements Renderer3DInterface
         $this->setUniformFloat('u_fog_far', 200.0);
         $this->setUniformVec3('u_fog_color', [0.5, 0.5, 0.5]);
         $this->setUniformVec3('u_albedo', [0.8, 0.8, 0.8]);
+
+        // Instancing off by default
+        if ($this->useInstancingLoc >= 0) {
+            glUniform1i($this->useInstancingLoc, 0);
+        }
 
         // Pass 1: collect non-draw commands
         foreach ($commandList->getCommands() as $command) {
@@ -113,7 +128,6 @@ class OpenGLRenderer3D implements Renderer3DInterface
                 $this->setUniformMat4('u_view', $command->viewMatrix);
                 $this->setUniformMat4('u_projection', $command->projectionMatrix);
 
-                // Camera position for fog: inverse of view matrix, extract translation
                 $cameraPos = $command->viewMatrix->inverse()->getTranslation();
                 $this->setUniformVec3('u_camera_pos', [$cameraPos->x, $cameraPos->y, $cameraPos->z]);
 
@@ -167,9 +181,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             } elseif ($command instanceof DrawMeshInstanced) {
                 $mat = MaterialRegistry::get($command->materialId);
                 if ($mat === null || $mat->alpha >= 1.0) {
-                    foreach ($command->matrices as $matrix) {
-                        $this->drawMeshCommand($command->meshId, $command->materialId, $matrix);
-                    }
+                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices);
                 }
             }
         }
@@ -187,36 +199,177 @@ class OpenGLRenderer3D implements Renderer3DInterface
             } elseif ($command instanceof DrawMeshInstanced) {
                 $mat = MaterialRegistry::get($command->materialId);
                 if ($mat !== null && $mat->alpha < 1.0) {
-                    foreach ($command->matrices as $matrix) {
-                        $this->drawMeshCommand($command->meshId, $command->materialId, $matrix);
-                    }
+                    $this->drawMeshInstancedCommand($command->meshId, $command->materialId, $command->matrices);
                 }
             }
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
 
-        // Pass 3: skybox (drawn last with depth ≤ test so it fills background)
+        // Pass 3: skybox
         if ($this->pendingSkyboxId !== null && $this->currentViewMatrix !== null && $this->currentProjectionMatrix !== null) {
             $this->renderSkybox($this->pendingSkyboxId);
             $this->pendingSkyboxId = null;
         }
     }
 
+    /**
+     * Draw a single mesh with a model matrix uniform (non-instanced path).
+     */
     private function drawMeshCommand(string $meshId, string $materialId, Mat4 $modelMatrix): void
     {
         $meshData = MeshRegistry::get($meshId);
         if ($meshData === null) {
-            return; // Mesh not registered — skip silently
+            return;
         }
 
         if (!isset($this->vaoCache[$meshId])) {
             $this->uploadMesh($meshId, $meshData);
         }
 
-        $this->setUniformMat4('u_model', $modelMatrix);
+        // Ensure instancing is off
+        if ($this->useInstancingLoc >= 0) {
+            glUniform1i($this->useInstancingLoc, 0);
+        }
 
-        // Resolve material properties
+        $this->setUniformMat4('u_model', $modelMatrix);
+        $this->applyMaterial($materialId);
+
+        glBindVertexArray($this->vaoCache[$meshId]);
+        glDrawElements(GL_TRIANGLES, $this->indexCountCache[$meshId], GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+    }
+
+    /**
+     * Draw multiple instances of the same mesh in a single GPU call.
+     * Uses glDrawArraysInstanced with per-instance model matrix attributes.
+     *
+     * @param Mat4[] $matrices
+     */
+    private function drawMeshInstancedCommand(string $meshId, string $materialId, array $matrices): void
+    {
+        if (empty($matrices)) {
+            return;
+        }
+
+        $meshData = MeshRegistry::get($meshId);
+        if ($meshData === null) {
+            return;
+        }
+
+        // Ensure instanced VAO exists (expanded, non-indexed)
+        if (!isset($this->instancedVaoCache[$meshId])) {
+            $this->uploadInstancedMesh($meshId, $meshData);
+        }
+
+        $instanceCount = count($matrices);
+
+        // Serialize all matrices into flat float array
+        $floats = [];
+        foreach ($matrices as $matrix) {
+            foreach ($matrix->toArray() as $v) {
+                $floats[] = $v;
+            }
+        }
+
+        glBindVertexArray($this->instancedVaoCache[$meshId]);
+
+        // Update instance buffer
+        if (!isset($this->instanceVboCache[$meshId])) {
+            $vbo = 0;
+            glGenBuffers(1, $vbo);
+            if (!is_int($vbo) || $vbo === 0) {
+                glBindVertexArray(0);
+                return;
+            }
+            $this->instanceVboCache[$meshId] = $vbo;
+
+            glBindBuffer(GL_ARRAY_BUFFER, $vbo);
+            $mat4Stride = 16 * 4;
+            for ($col = 0; $col < 4; $col++) {
+                $loc = 3 + $col;
+                glVertexAttribPointer($loc, 4, GL_FLOAT, false, $mat4Stride, $col * 4 * 4);
+                glEnableVertexAttribArray($loc);
+                glVertexAttribDivisor($loc, 1);
+            }
+        }
+
+        glBindBuffer(GL_ARRAY_BUFFER, $this->instanceVboCache[$meshId]);
+        glBufferData(GL_ARRAY_BUFFER, new FloatBuffer($floats), GL_DYNAMIC_DRAW);
+
+        // Enable instancing in shader
+        if ($this->useInstancingLoc >= 0) {
+            glUniform1i($this->useInstancingLoc, 1);
+        }
+
+        $this->applyMaterial($materialId);
+
+        glDrawArraysInstanced(
+            GL_TRIANGLES,
+            0,
+            $this->expandedVertexCount[$meshId],
+            $instanceCount,
+        );
+
+        if ($this->useInstancingLoc >= 0) {
+            glUniform1i($this->useInstancingLoc, 0);
+        }
+
+        glBindVertexArray(0);
+    }
+
+    /**
+     * Upload an expanded (non-indexed) mesh VAO for instanced rendering.
+     * glDrawArraysInstanced requires non-indexed vertices.
+     */
+    private function uploadInstancedMesh(string $meshId, MeshData $meshData): void
+    {
+        $vao = 0;
+        glGenVertexArrays(1, $vao);
+        if (!is_int($vao) || $vao === 0) {
+            throw new \RuntimeException('glGenVertexArrays failed (instanced)');
+        }
+        glBindVertexArray($vao);
+
+        // Expand indexed mesh to non-indexed: duplicate vertices per triangle
+        $expanded = [];
+        $indexCount = count($meshData->indices);
+        for ($i = 0; $i < $indexCount; $i++) {
+            $idx = $meshData->indices[$i];
+            $expanded[] = $meshData->vertices[$idx * 3];
+            $expanded[] = $meshData->vertices[$idx * 3 + 1];
+            $expanded[] = $meshData->vertices[$idx * 3 + 2];
+            $expanded[] = $meshData->normals[$idx * 3];
+            $expanded[] = $meshData->normals[$idx * 3 + 1];
+            $expanded[] = $meshData->normals[$idx * 3 + 2];
+            $expanded[] = $meshData->uvs[$idx * 2];
+            $expanded[] = $meshData->uvs[$idx * 2 + 1];
+        }
+
+        $vbo = 0;
+        glGenBuffers(1, $vbo);
+        if (!is_int($vbo) || $vbo === 0) {
+            throw new \RuntimeException('glGenBuffers failed (instanced VBO)');
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, $vbo);
+        glBufferData(GL_ARRAY_BUFFER, new FloatBuffer($expanded), GL_STATIC_DRAW);
+
+        $stride = 8 * 4;
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, $stride, 0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, false, $stride, 3 * 4);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, false, $stride, 6 * 4);
+        glEnableVertexAttribArray(2);
+
+        glBindVertexArray(0);
+
+        $this->instancedVaoCache[$meshId] = $vao;
+        $this->expandedVertexCount[$meshId] = $indexCount; // one vertex per index
+    }
+
+    private function applyMaterial(string $materialId): void
+    {
         $material = MaterialRegistry::get($materialId);
         if ($material !== null) {
             $this->setUniformVec3('u_albedo', [$material->albedo->r, $material->albedo->g, $material->albedo->b]);
@@ -231,15 +384,10 @@ class OpenGLRenderer3D implements Renderer3DInterface
             $this->setUniformFloat('u_metallic', 0.0);
             $this->setUniformFloat('u_alpha', 1.0);
         }
-
-        glBindVertexArray($this->vaoCache[$meshId]);
-        glDrawElements(GL_TRIANGLES, $this->indexCountCache[$meshId], GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
     }
 
     private function uploadMesh(string $meshId, MeshData $meshData): void
     {
-        // VAO
         $vao = 0;
         glGenVertexArrays(1, $vao);
         if (!is_int($vao) || $vao === 0) {
@@ -251,15 +399,12 @@ class OpenGLRenderer3D implements Renderer3DInterface
         $vertexCount = $meshData->vertexCount();
         $interleaved = [];
         for ($i = 0; $i < $vertexCount; $i++) {
-            // position
             $interleaved[] = $meshData->vertices[$i * 3];
             $interleaved[] = $meshData->vertices[$i * 3 + 1];
             $interleaved[] = $meshData->vertices[$i * 3 + 2];
-            // normal
             $interleaved[] = $meshData->normals[$i * 3];
             $interleaved[] = $meshData->normals[$i * 3 + 1];
             $interleaved[] = $meshData->normals[$i * 3 + 2];
-            // uv
             $interleaved[] = $meshData->uvs[$i * 2];
             $interleaved[] = $meshData->uvs[$i * 2 + 1];
         }
@@ -272,14 +417,11 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glBindBuffer(GL_ARRAY_BUFFER, $vbo);
         glBufferData(GL_ARRAY_BUFFER, new FloatBuffer($interleaved), GL_STATIC_DRAW);
 
-        $stride = 8 * 4; // 8 floats × 4 bytes
-        // position: layout location 0
+        $stride = 8 * 4;
         glVertexAttribPointer(0, 3, GL_FLOAT, false, $stride, 0);
         glEnableVertexAttribArray(0);
-        // normal: layout location 1
         glVertexAttribPointer(1, 3, GL_FLOAT, false, $stride, 3 * 4);
         glEnableVertexAttribArray(1);
-        // uv: layout location 2
         glVertexAttribPointer(2, 2, GL_FLOAT, false, $stride, 6 * 4);
         glEnableVertexAttribArray(2);
 
@@ -356,7 +498,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
     {
         $loc = glGetUniformLocation($this->shaderProgram, $name);
         if ($loc >= 0) {
-            glUniformMatrix4fv($loc, false, new \GL\Buffer\FloatBuffer($matrix->toArray()));
+            glUniformMatrix4fv($loc, false, new FloatBuffer($matrix->toArray()));
         }
     }
 
@@ -389,7 +531,6 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
     private function initSkybox(): void
     {
-        // Compile skybox shaders
         $vertSource = $this->loadShaderSource(__DIR__ . '/../../resources/shaders/source/skybox.vert.glsl');
         $fragSource = $this->loadShaderSource(__DIR__ . '/../../resources/shaders/source/skybox.frag.glsl');
 
@@ -427,7 +568,6 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glDeleteShader($frag);
         $this->skyboxShaderProgram = $program;
 
-        // Create skybox cube VAO (unit cube, positions only)
         /** @var float[] $skyboxVertices */
         $skyboxVertices = [
             -1.0,  1.0, -1.0,  -1.0, -1.0, -1.0,   1.0, -1.0, -1.0,   1.0, -1.0, -1.0,   1.0,  1.0, -1.0,  -1.0,  1.0, -1.0,
@@ -525,17 +665,16 @@ class OpenGLRenderer3D implements Renderer3DInterface
             return;
         }
 
-        // Draw skybox with depth ≤ (passes where nothing has been drawn, fails behind objects)
         glDepthFunc(GL_LEQUAL);
         glUseProgram($this->skyboxShaderProgram);
 
         $viewLoc = glGetUniformLocation($this->skyboxShaderProgram, 'u_view');
         if ($viewLoc >= 0 && $this->currentViewMatrix !== null) {
-            glUniformMatrix4fv($viewLoc, false, new \GL\Buffer\FloatBuffer($this->currentViewMatrix->toArray()));
+            glUniformMatrix4fv($viewLoc, false, new FloatBuffer($this->currentViewMatrix->toArray()));
         }
         $projLoc = glGetUniformLocation($this->skyboxShaderProgram, 'u_projection');
         if ($projLoc >= 0 && $this->currentProjectionMatrix !== null) {
-            glUniformMatrix4fv($projLoc, false, new \GL\Buffer\FloatBuffer($this->currentProjectionMatrix->toArray()));
+            glUniformMatrix4fv($projLoc, false, new FloatBuffer($this->currentProjectionMatrix->toArray()));
         }
 
         glActiveTexture(GL_TEXTURE0);
@@ -550,7 +689,6 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glBindVertexArray(0);
 
         glDepthFunc(GL_LESS);
-        // Restore mesh shader for any subsequent draws
         glUseProgram($this->shaderProgram);
     }
 }
