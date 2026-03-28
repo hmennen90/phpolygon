@@ -2,6 +2,10 @@ parameters:
     level: 10
     paths:
         - src
+    excludePaths:
+        - src/Rendering/VulkanRenderer3D.php
+    scanFiles:
+        - stubs/vulkan.stub.php
     ignoreErrors:
         -
             identifier: trait.unused

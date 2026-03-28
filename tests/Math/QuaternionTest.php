@@ -115,7 +115,7 @@ class QuaternionTest extends TestCase
 
     public function testToRotationMatrixFromRotationMatrixRoundTrip(): void
     {
-        $q = Quaternion::fromAxisAngle(new Vec3(1.0, 1.0, 0.0)->normalize(), M_PI / 3)->normalize();
+        $q = Quaternion::fromAxisAngle((new Vec3(1.0, 1.0, 0.0))->normalize(), M_PI / 3)->normalize();
         $mat = $q->toRotationMatrix();
         $restored = Quaternion::fromRotationMatrix($mat)->normalize();
 

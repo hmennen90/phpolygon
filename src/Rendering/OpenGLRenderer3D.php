@@ -465,7 +465,12 @@ class OpenGLRenderer3D implements Renderer3DInterface
                 }
             }
             imagedestroy($img);
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + $i, 0, GL_RGB, $w, $h, 0, GL_RGB, GL_UNSIGNED_BYTE, $data);
+
+            $unpacked = unpack('C*', $data);
+            /** @var array<int> $bytes */
+            $bytes = $unpacked !== false ? array_values($unpacked) : [];
+            $buffer = new \GL\Buffer\UByteBuffer($bytes);
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + $i, 0, GL_RGB, $w, $h, 0, GL_RGB, GL_UNSIGNED_BYTE, $buffer);
         }
 
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
