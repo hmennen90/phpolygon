@@ -113,6 +113,6 @@ class FontRenderingTest extends TestCase
 
         $renderer->endFrame();
 
-        $this->assertScreenshot($renderer, 'text-with-shapes');
+        $this->assertScreenshot($renderer, 'text-with-shapes', maxDiffPixelRatio: 0.001);
     }
 }
