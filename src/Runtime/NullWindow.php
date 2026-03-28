@@ -24,7 +24,7 @@ class NullWindow extends Window
         $this->nullHeight = $height;
     }
 
-    public function initialize(Input $input): void
+    public function initialize(InputInterface $input): void
     {
         // No GLFW, no GL context — just mark as ready
     }

@@ -10,8 +10,13 @@ use PHPolygon\Event\EventDispatcher;
 use PHPolygon\Locale\LocaleManager;
 use PHPolygon\Rendering\Camera2D;
 use PHPolygon\Rendering\NullRenderer2D;
+use PHPolygon\Rendering\NullRenderer3D;
+use PHPolygon\Rendering\OpenGLRenderer3D;
+use PHPolygon\Rendering\VulkanRenderer3D;
 use PHPolygon\Rendering\Renderer2D;
 use PHPolygon\Rendering\Renderer2DInterface;
+use PHPolygon\Rendering\RenderCommandList;
+use PHPolygon\Rendering\Renderer3DInterface;
 use PHPolygon\Rendering\TextureManager;
 use PHPolygon\Testing\NullTextureManager;
 use PHPolygon\Runtime\Clock;
@@ -40,6 +45,8 @@ class Engine
     public readonly SaveManager $saves;
 
     public Renderer2DInterface $renderer2D;
+    public ?Renderer3DInterface $renderer3D;
+    public readonly ?RenderCommandList $commandList3D;
 
     private bool $running = false;
     private bool $headless;
@@ -70,6 +77,19 @@ class Engine
         $this->audio = new AudioManager();
         $this->locale = new LocaleManager($config->defaultLocale, $config->fallbackLocale);
         $this->saves = new SaveManager($config->savePath, $config->maxSaveSlots);
+
+        if ($config->is3D) {
+            $this->commandList3D = new RenderCommandList();
+            // Non-headless GPU renderers require a GL/Vulkan context — initialized in run()
+            if ($this->headless || $config->renderBackend3D === 'null') {
+                $this->renderer3D = new NullRenderer3D($config->width, $config->height);
+            } else {
+                $this->renderer3D = null;
+            }
+        } else {
+            $this->commandList3D = null;
+            $this->renderer3D = null;
+        }
 
         if ($this->headless) {
             $this->window = new NullWindow($config->width, $config->height, $config->title);
@@ -106,6 +126,18 @@ class Engine
     public function run(): void
     {
         $this->window->initialize($this->input);
+
+        // Create GPU-backed renderers after window is initialized (need graphics context)
+        if (!$this->headless && $this->config->is3D) {
+            $this->renderer3D = match ($this->config->renderBackend3D) {
+                'vulkan' => new VulkanRenderer3D(
+                    $this->config->width,
+                    $this->config->height,
+                    $this->window->getHandle(),
+                ),
+                default => new OpenGLRenderer3D($this->config->width, $this->config->height),
+            };
+        }
 
         // Create Renderer2D after window is initialized (needs GL context)
         if (!$this->headless) {

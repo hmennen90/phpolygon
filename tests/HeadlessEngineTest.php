@@ -8,7 +8,9 @@ use PHPUnit\Framework\TestCase;
 use PHPolygon\Engine;
 use PHPolygon\EngineConfig;
 use PHPolygon\Rendering\NullRenderer2D;
+use PHPolygon\Rendering\NullRenderer3D;
 use PHPolygon\Rendering\Renderer2DInterface;
+use PHPolygon\Rendering\Renderer3DInterface;
 use PHPolygon\Runtime\NullWindow;
 
 class HeadlessEngineTest extends TestCase
@@ -132,5 +134,22 @@ class HeadlessEngineTest extends TestCase
         $config = new EngineConfig();
 
         $this->assertFalse($config->headless);
+    }
+
+    public function testHeadless3DEngineCreatesNullRenderer3D(): void
+    {
+        $engine = new Engine(new EngineConfig(headless: true, is3D: true));
+
+        $this->assertInstanceOf(NullRenderer3D::class, $engine->renderer3D);
+        $this->assertInstanceOf(Renderer3DInterface::class, $engine->renderer3D);
+        $this->assertNotNull($engine->commandList3D);
+    }
+
+    public function testNon3DEngineHasNullRenderer3D(): void
+    {
+        $engine = new Engine(new EngineConfig(headless: true, is3D: false));
+
+        $this->assertNull($engine->renderer3D);
+        $this->assertNull($engine->commandList3D);
     }
 }

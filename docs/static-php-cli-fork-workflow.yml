@@ -1,0 +1,200 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PHPolygon micro.sfx Builder
+#
+# Diesen Workflow in deinen static-php-cli Fork kopieren:
+#   hmennen90/static-php-cli → .github/workflows/phpolygon-micro-sfx.yml
+#
+# Was er tut:
+#   - Baut micro.sfx für alle 5 Targets auf nativen Runnern
+#   - Erstellt ein GitHub Release mit den Assets
+#   - Naming: micro-sfx-base-{os}.zip  (wie StaticPhpResolver erwartet)
+#
+# Trigger:
+#   - workflow_dispatch (manuell, mit optionalem Tag)
+#   - push auf Tags  php-*  (z.B. php-8.3.10)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: PHPolygon micro.sfx
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'PHP version to build (e.g. 8.3.10)'
+        required: true
+        default: '8.3'
+      tag:
+        description: 'Release tag to create (e.g. php-8.3.10). Leave empty = no release.'
+        required: false
+  push:
+    tags:
+      - 'php-*'
+
+jobs:
+  build:
+    name: micro.sfx — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - os: macos-14
+            target: macos-aarch64
+            php_target: aarch64-apple-darwin
+            sfx_name: micro.sfx
+
+          # macOS Intel
+          - os: macos-13
+            target: macos-x86_64
+            php_target: x86_64-apple-darwin
+            sfx_name: micro.sfx
+
+          # Linux x86_64
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            php_target: x86_64-linux-musl
+            sfx_name: micro.sfx
+
+          # Linux ARM64
+          - os: ubuntu-22.04
+            target: linux-aarch64
+            php_target: aarch64-linux-musl
+            sfx_name: micro.sfx
+            qemu: true
+
+          # Windows x86_64
+          - os: windows-latest
+            target: windows-x86_64
+            php_target: x86_64-pc-windows-msvc
+            sfx_name: micro.sfx.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── QEMU für ARM64 cross-compile auf Linux ───────────────────────────────
+      - name: Set up QEMU (ARM64)
+        if: matrix.qemu
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # ── PHP für Build-Tools ──────────────────────────────────────────────────
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, tokenizer, json
+          coverage: none
+
+      # ── static-php-cli installieren ──────────────────────────────────────────
+      - name: Install static-php-cli
+        run: composer install --no-interaction
+
+      # ── PHP-Version auflösen ─────────────────────────────────────────────────
+      - name: Resolve PHP version
+        id: phpver
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/php-* ]]; then
+            VERSION="${GITHUB_REF_NAME#php-}"
+          else
+            VERSION="${{ inputs.php_version }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # ── Extensions für Game-Engine ───────────────────────────────────────────
+      # Minimales Set: was PHPolygon's PHAR braucht (kein glfw — zu komplex für static build)
+      - name: Build micro.sfx (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          php bin/spc build \
+            "bcmath,ctype,dom,fileinfo,filter,json,mbstring,openssl,phar,posix,readline,tokenizer,xml,xmlwriter,zip,zlib" \
+            --build-micro \
+            --php-version=${{ steps.phpver.outputs.version }} \
+            --no-interaction
+
+      - name: Build micro.sfx (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          php bin/spc build `
+            "bcmath,ctype,dom,fileinfo,filter,json,mbstring,openssl,phar,posix,readline,tokenizer,xml,xmlwriter,zip,zlib" `
+            --build-micro `
+            --php-version=${{ steps.phpver.outputs.version }} `
+            --no-interaction
+
+      # ── Artifact einpacken ───────────────────────────────────────────────────
+      - name: Package micro.sfx into zip
+        shell: bash
+        run: |
+          mkdir -p dist
+          # static-php-cli legt micro.sfx nach buildroot/bin/
+          SFX_PATH="buildroot/bin/${{ matrix.sfx_name }}"
+          if [ ! -f "$SFX_PATH" ]; then
+            # Fallback: direkt im Projektroot
+            SFX_PATH="${{ matrix.sfx_name }}"
+          fi
+          cp "$SFX_PATH" dist/${{ matrix.sfx_name }}
+          cd dist
+          zip "micro-sfx-base-${{ matrix.target }}.zip" ${{ matrix.sfx_name }}
+          echo "ZIP contents:"
+          unzip -l "micro-sfx-base-${{ matrix.target }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-sfx-base-${{ matrix.target }}
+          path: dist/micro-sfx-base-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  # ── Release erstellen und alle Zips anhängen ─────────────────────────────
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/php-') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Determine tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/php-* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "PHPolygon micro.sfx — ${{ steps.tag.outputs.tag }}"
+          body: |
+            Pre-built `micro.sfx` binaries for PHPolygon game builds.
+
+            ## Included targets
+            | Asset | Platform |
+            |-------|---------|
+            | `micro-sfx-base-macos-aarch64.zip` | macOS Apple Silicon |
+            | `micro-sfx-base-macos-x86_64.zip`  | macOS Intel |
+            | `micro-sfx-base-linux-x86_64.zip`  | Linux x86_64 |
+            | `micro-sfx-base-linux-aarch64.zip` | Linux ARM64 |
+            | `micro-sfx-base-windows-x86_64.zip`| Windows x86_64 |
+
+            ## Usage
+            The PHPolygon build system (`StaticPhpResolver`) downloads these automatically.
+            No manual action required.
+          files: dist/**/*.zip
+          fail_on_unmatched_files: false

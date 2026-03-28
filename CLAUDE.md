@@ -8,8 +8,17 @@ works in this repository. Read it fully before writing any code.
 ## Engine identity
 
 **PHPolygon** is a standalone PHP-native game engine. The primary authoring tool
-is Claude Code. The primary render backend is OpenGL 4.1 via php-glfw/NanoVG
-for 2D, Vulkan via php-vulkan for 3D (Phase 6).
+is Claude Code. Worlds, characters, and game logic are written entirely in PHP —
+no external 3D modelling tools (Blender, Maya, etc.) and no imported model files
+(.fbx, .obj, .gltf) are part of the workflow. Geometry is generated procedurally
+from PHP code.
+
+Render backends:
+- **2D:** OpenGL 4.1 via php-glfw / NanoVG — active, all phases
+- **3D (Phase 7):** OpenGL 4.1 via php-glfw — first 3D backend, validates the
+  `RenderCommandList` abstraction
+- **3D (Phase 8):** Vulkan via php-vulkan — high-performance backend, drop-in
+  replacement behind the same interface
 
 Games are built in separate repositories and require `phpolygon/phpolygon`
 via Composer.
@@ -43,19 +52,50 @@ via Composer.
 ### Render interface: Layered
 - `RenderContextInterface` — base: `beginFrame()`, `endFrame()`, `clear()`,
   `setViewport()`
-- `Renderer2D extends RenderContextInterface` — NanoVG backend for 2D games
-- `Renderer3D extends RenderContextInterface` — Vulkan backend for 3D games
+- `Renderer2DInterface extends RenderContextInterface` — NanoVG backend for 2D games
+- `Renderer3DInterface extends RenderContextInterface` — 3D backend (OpenGL or Vulkan)
 
-`Renderer3D` uses a **Command Buffer abstraction** from day one. PHP builds a
-`RenderCommandList`; the backend (Vulkan) executes it. The OpenGL 3D backend
-(if ever needed) emulates command buffers. Do not design `Renderer3D` around
-the OpenGL state-machine model.
+`Renderer3DInterface` is driven by a **RenderCommandList** from day one. PHP builds
+the command list; the backend executes it. This keeps game code fully backend-agnostic:
+
+```
+Game Code / Scene
+      ↓  (builds)
+RenderCommandList        ← pure PHP data, no GPU calls
+      ↓  (executed by)
+┌──────────────────┬──────────────────┬──────────────────┐
+OpenGLRenderer3D   VulkanRenderer3D   NullRenderer3D
+(Phase 7, active)  (Phase 8, planned)  (headless / tests)
+```
+
+**Do not design `Renderer3DInterface` around the OpenGL state-machine model.**
+The OpenGL 3D backend *emulates* command buffers — it iterates the command list
+and issues the necessary GL calls internally. Vulkan natively maps to this model.
+
+### RenderCommandList — available commands
+
+All commands are plain PHP value objects (no methods, only constructor properties):
+
+| Command class | Purpose |
+|---|---|
+| `SetCamera` | `viewMatrix: Mat4`, `projectionMatrix: Mat4` |
+| `SetAmbientLight` | `color: Color`, `intensity: float` |
+| `SetDirectionalLight` | `direction: Vec3`, `color: Color`, `intensity: float` |
+| `AddPointLight` | `position: Vec3`, `color: Color`, `intensity: float`, `radius: float` |
+| `DrawMesh` | `meshId: string`, `materialId: string`, `modelMatrix: Mat4` |
+| `DrawMeshInstanced` | `meshId: string`, `materialId: string`, `matrices: Mat4[]` |
+| `SetSkybox` | `cubemapId: string` |
+| `SetFog` | `color: Color`, `near: float`, `far: float` |
+
+Commands are appended to `RenderCommandList` during the scene tick. The
+`Renderer3DSystem` flushes the list once per frame.
 
 ### GPU backends
 | Backend | Status | Target |
 |---|---|---|
-| OpenGL 4.1 via php-glfw | Active | 2D games, all phases |
-| Vulkan via php-vulkan | Phase 6 | 3D games |
+| OpenGL 4.1 via php-glfw (2D/NanoVG) | Active | 2D games, all phases |
+| OpenGL 4.1 via php-glfw (3D) | **Phase 7 — active development** | 3D games, first backend |
+| Vulkan via php-vulkan | Phase 8 | 3D games, production backend |
 | D3D11 / D3D12 | Cancelled | — |
 | Metal | Not planned | — |
 
@@ -64,9 +104,83 @@ Vulkan covers Windows natively; MoltenVK covers macOS.
 
 ### Shaders
 - Authoring language: **GLSL** (human- and AI-readable plaintext)
-- Compiled to **SPIR-V** at build time via `glslangValidator` or `shaderc`
-- SPIR-V binaries are committed to `assets/shaders/compiled/`
-- Claude Code writes GLSL; the build step produces SPIR-V. Never write SPIR-V by hand.
+- 2D: used directly by NanoVG / OpenGL at runtime
+- 3D OpenGL: GLSL loaded and compiled at runtime via `glCreateShader`
+- 3D Vulkan: GLSL compiled to **SPIR-V** at build time via `glslangValidator` or
+  `shaderc`; SPIR-V binaries committed to `resources/shaders/compiled/`
+- Claude Code writes GLSL. Never write SPIR-V by hand.
+- Shader naming: `name.vert.glsl` / `name.frag.glsl` → `name.vert.spv` / `name.frag.spv`
+
+### 3D Math
+The following value objects exist or must be added before any 3D rendering work:
+
+| Class | Status | Purpose |
+|---|---|---|
+| `Vec2` | Done | 2D vector |
+| `Vec3` | Done | 3D vector, cross/dot product |
+| `Vec4` | Needed | Homogeneous coordinates, RGBA |
+| `Mat3` | Done | 2D transforms |
+| `Mat4` | **Needed** | 3D transforms, MVP matrix |
+| `Quaternion` | **Needed** | 3D rotation without Gimbal Lock |
+| `Rect` | Done | 2D axis-aligned rectangle |
+
+`Mat4` and `Quaternion` are pure PHP value objects — no GPU dependency. They must
+be implemented and fully tested before any 3D backend work begins.
+
+### 3D Components
+Components follow the same ECS discipline as 2D. 3D-specific components:
+
+| Component | Purpose |
+|---|---|
+| `Transform3D` | `position: Vec3`, `rotation: Quaternion`, `scale: Vec3`, world/local matrix |
+| `Camera3DComponent` | `fov: float`, `near: float`, `far: float`, projection type |
+| `MeshRenderer` | `meshId: string`, `materialId: string`, `castShadows: bool` |
+| `DirectionalLight` | `direction: Vec3`, `color: Color`, `intensity: float` |
+| `PointLight` | `color: Color`, `intensity: float`, `radius: float` |
+| `CharacterController3D` | Capsule collision, gravity, slope detection, step height |
+
+`Transform3D` replaces `Transform2D` in 3D scenes. Never mix 2D and 3D transform
+components on the same entity.
+
+### 3D Systems
+
+| System | Purpose |
+|---|---|
+| `Renderer3DSystem` | Collects `MeshRenderer` + `Transform3D`, builds `RenderCommandList`, flushes |
+| `Camera3DSystem` | Updates view/projection matrices, pushes `SetCamera` command |
+| `Physics3DSystem` | Capsule vs AABB collision, gravity integration (Phase 7+) |
+
+### Procedural geometry — code-driven worlds
+
+**PHPolygon does not use external 3D model files.** All geometry is generated
+programmatically in PHP. This is a core design principle, not a limitation.
+
+The `ProceduralMesh` system generates vertex/index buffers from PHP:
+
+```php
+// Primitives — generate and register once, draw many times
+MeshRegistry::register('box_1x1x1',    BoxMesh::generate(1.0, 1.0, 1.0));
+MeshRegistry::register('cylinder_r1',  CylinderMesh::generate(radius: 1.0, height: 2.0, segments: 16));
+MeshRegistry::register('sphere_r1',    SphereMesh::generate(radius: 1.0, stacks: 12, slices: 16));
+MeshRegistry::register('plane_10x10',  PlaneMesh::generate(10.0, 10.0));
+
+// Composite geometry — buildings, terrain, districts from code
+MeshRegistry::register('building_php', BuildingMesh::generate(
+    floors: 4, width: 6.0, depth: 5.0, style: BuildingStyle::Industrial
+));
+```
+
+Procedural mesh generators live in `src/Geometry/`. They return a `MeshData`
+value object (vertices, normals, UVs, indices) that the backend uploads to the GPU.
+Meshes are uploaded once and referenced by string ID. Instance-drawing
+(`DrawMeshInstanced`) is used whenever the same mesh appears multiple times in a scene.
+
+Benefits of this approach over file-based assets:
+- Entire world is version-controlled as PHP code
+- Parameters change in one place — world updates everywhere
+- No external tool dependency (no Blender, no FBX pipeline)
+- Claude Code can generate and iterate geometry directly
+- `DrawMeshInstanced` makes large worlds cheap to render
 
 ### Editor
 - The editor is a **NativePHP desktop application** (Electron wrapper + Vue SPA).
@@ -86,14 +200,17 @@ Vulkan covers Windows natively; MoltenVK covers macOS.
 | Concept | Convention | Example |
 |---|---|---|
 | Engine namespace | `PHPolygon\` | `PHPolygon\ECS\Entity` |
-| Component classes | Noun, no suffix | `MeshRenderer`, `BoxCollider2D` |
-| System classes | Noun + `System` | `EconomySystem`, `PhysicsSystem` |
+| Component classes | Noun, no suffix | `MeshRenderer`, `BoxCollider2D`, `Transform3D` |
+| System classes | Noun + `System` | `Renderer3DSystem`, `Physics3DSystem` |
 | Events | Past tense noun | `EntitySpawned`, `SceneLoaded` |
-| Interfaces | `*Interface` | `RenderContextInterface` |
+| Interfaces | `*Interface` | `RenderContextInterface`, `Renderer3DInterface` |
 | JSON scene files | `snake_case.scene.json` | `main_menu.scene.json` |
 | PHP scene files | `PascalCase.php` | `MainMenu.php` |
 | Shader source | `name.vert.glsl` / `name.frag.glsl` | `terrain.vert.glsl` |
 | Compiled shaders | `name.vert.spv` / `name.frag.spv` | `terrain.vert.spv` |
+| Geometry generators | `*Mesh` | `BoxMesh`, `BuildingMesh`, `TerrainMesh` |
+| Mesh IDs | `snake_case` string | `'box_1x1x1'`, `'building_php_4f'` |
+| Material IDs | `snake_case` string | `'stone_wall'`, `'neon_glass'` |
 
 ---
 
@@ -101,14 +218,20 @@ Vulkan covers Windows natively; MoltenVK covers macOS.
 
 - **Do not** put cross-entity logic in a Component method.
 - **Do not** implement `toJson()` / `fromJson()` manually on Components — use Attributes.
-- **Do not** design `Renderer3D` around OpenGL state-machine patterns.
-- **Do not** add D3D, Metal, or Vulkan stubs inside `Renderer2D`.
+- **Do not** design `Renderer3DInterface` around the OpenGL state-machine model —
+  game code builds a `RenderCommandList`; backends execute it.
+- **Do not** import 3D model files (.fbx, .obj, .gltf, .blend) — generate geometry
+  in PHP via the `ProceduralMesh` system.
+- **Do not** add D3D, Metal, or Vulkan stubs inside `OpenGLRenderer3D`.
 - **Do not** start a built-in HTTP server for editor communication — the editor has
   direct filesystem access.
 - **Do not** modify `game.phar` or compiled SPIR-V by hand.
 - **Do not** store runtime game state in PHP files — use JSON.
 - **Do not** use FFI for frame-critical calls (e.g. `SteamAPI_RunCallbacks()`) —
   use native C-extensions.
+- **Do not** mix `Transform2D` and `Transform3D` on the same entity.
+- **Do not** call GPU APIs (glDraw*, vkCmd*) from Systems or Components — only
+  backends touch the GPU.
 
 ---
 
@@ -116,8 +239,8 @@ Vulkan covers Windows natively; MoltenVK covers macOS.
 
 | Extension | Purpose | Status |
 |---|---|---|
-| php-glfw | OpenGL 4.1 + NanoVG (2D rendering) | Active |
-| php-vulkan | Vulkan (3D rendering) | Available, Phase 6 |
+| php-glfw | OpenGL 4.1 + NanoVG (2D and 3D rendering) | Active |
+| php-vulkan | Vulkan (3D production backend) | Available, Phase 8 |
 | php-steamworks | Steamworks SDK integration | Published on Packagist |
 
 When writing engine code that touches GPU, Steam, or audio — use the extension.
@@ -131,10 +254,13 @@ Do not wrap extension calls in FFI unless there is an explicit reason.
 codetycoon          ← native launcher binary (C/Go/Rust)
 runtime/php         ← static PHP binary (static-php-cli, includes all extensions)
 game.phar           ← engine + game logic, Opcache bytecode, not human-readable
-assets/             ← open: sprites, sounds, JSON scenes, UI layouts
+assets/             ← open: sounds, JSON scenes, UI layouts
+resources/          ← shaders (GLSL source + compiled SPIR-V), fonts
 saves/              ← user data: JSON save files
 mods/               ← open: PHP + assets, scanned by ModLoader
 ```
+
+No `assets/models/` directory exists. Geometry lives in PHP code, not in files.
 
 - Game core ships as PHAR with Opcache bytecode (comparable protection to C# IL).
 - `mods/` is intentionally open — modders and Claude Code use the same tools.
@@ -147,14 +273,52 @@ mods/               ← open: PHP + assets, scanned by ModLoader
 Claude Code is the primary authoring tool. When generating content:
 
 1. **Scenes** — write PHP files (canonical). JSON is derived by the transpiler.
-2. **Components** — PHP classes with `#[Component]` attribute, Lifecycle hooks.
-3. **UI layouts** — JSON (transpiled to PHP at dev time, zero runtime parser overhead).
-4. **Game logic** — PHP Systems and Components.
-5. **Shaders** — GLSL source files in `assets/shaders/source/`.
-6. **Physics materials** — JSON definitions in `assets/physics/`.
-7. **Mods** — `mod.json` + PHP class implementing `ModInterface` + assets.
+2. **Components** — PHP classes with `#[Component]` attribute, lifecycle hooks.
+3. **Geometry** — PHP classes in `src/Geometry/` or the game repo's `src/World/`.
+   Use `BoxMesh`, `CylinderMesh`, `SphereMesh` as primitives. Build composite
+   geometry (buildings, terrain, props) as named generators.
+4. **Materials** — PHP value objects (`MaterialDefinition`) registered by string ID.
+   Properties: albedo color, roughness, metallic, emission. No texture files required
+   for procedural worlds; add texture support only when explicitly needed.
+5. **Game logic** — PHP Systems and Components.
+6. **UI layouts** — JSON (transpiled to PHP at dev time, zero runtime parser overhead).
+7. **Shaders** — GLSL source files in `resources/shaders/source/`.
+8. **Physics materials** — JSON definitions in `assets/physics/`.
+9. **Mods** — `mod.json` + PHP class implementing `ModInterface` + assets.
 
 Every generated file is a Git commit. Every step is reviewable. No black-box state.
+
+**Code-driven world example:**
+
+```php
+// A PHP district scene — no model files, no Blender
+class PhpDistrictScene extends Scene
+{
+    public function build(SceneBuilder $b): void
+    {
+        // Ground plane
+        $b->entity('Ground')
+            ->with(new Transform3D(scale: new Vec3(200, 1, 200)))
+            ->with(new MeshRenderer('plane_1x1', 'cobblestone'));
+
+        // 20 procedural buildings via instancing
+        foreach ($this->buildingLayout() as $i => $pos) {
+            $b->entity("Building_{$i}")
+                ->with(new Transform3D(position: $pos))
+                ->with(new MeshRenderer(
+                    BuildingMesh::id(floors: rand(2, 5), style: BuildingStyle::Industrial),
+                    'brick_wall'
+                ));
+        }
+
+        // Player start
+        $b->entity('Player')
+            ->with(new Transform3D(position: new Vec3(0, 2, 0)))
+            ->with(new CharacterController3D(height: 1.8, radius: 0.4))
+            ->with(new ThirdPersonCamera(distance: 5.0, pitch: -20.0));
+    }
+}
+```
 
 ---
 
@@ -221,7 +385,7 @@ php vendor/bin/phpolygon build --dry-run                           # show config
 The stub defines these at runtime:
 - `PHPOLYGON_PATH_ROOT` — resource base directory
 - `PHPOLYGON_PATH_ASSETS` — extracted assets
-- `PHPOLYGON_PATH_RESOURCES` — extracted resources
+- `PHPOLYGON_PATH_RESOURCES` — extracted resources (shaders, fonts)
 - `PHPOLYGON_PATH_SAVES` — user save data
 - `PHPOLYGON_PATH_MODS` — mod directory
 
@@ -243,17 +407,18 @@ $engine = new Engine(new EngineConfig(headless: true));
 |---|---|
 | `Window` (GLFW) | `NullWindow` (no-op, configurable dimensions) |
 | `Renderer2D` (NanoVG/OpenGL) | `NullRenderer2D` (accepts all draws, no output) |
+| `Renderer3D` (OpenGL/Vulkan) | `NullRenderer3D` (accepts all commands, no output) |
 | `TextureManager` (GL textures) | `NullTextureManager` (dummy textures with dimensions) |
 
-The `headless` flag in `EngineConfig` switches all three automatically.
-`NullWindow` extends `Window`, `NullTextureManager` extends `TextureManager` —
-existing code that type-hints against the base classes works unchanged.
+The `headless` flag in `EngineConfig` switches all backends automatically.
 
 ### Null objects
 
 - `NullWindow` — returns configured width/height, `shouldClose()` returns false
   until `requestClose()` is called, all other methods are no-ops
 - `NullRenderer2D` — implements `Renderer2DInterface`, every draw method is a no-op
+- `NullRenderer3D` — implements `Renderer3DInterface`, accepts `RenderCommandList`,
+  executes nothing; command list is readable for test assertions
 - `NullTextureManager` — `load()` auto-creates dummy `Texture` objects with
   `glId: 0` and configurable width/height; `register(id, w, h)` pre-registers
   textures for tests that need specific dimensions
@@ -272,7 +437,30 @@ existing code that type-hints against the base classes works unchanged.
 | `VisualTestCase` | PHPUnit trait — Playwright-style `assertScreenshot()` |
 | `NullTextureManager` | Headless texture stubs for scene rendering tests |
 
-### VRT workflow (Playwright-style)
+### 3D scene testing
+
+3D scenes are tested via `NullRenderer3D` — the command list is inspected
+structurally rather than pixel-compared (no GPU available in CI):
+
+```php
+public function testPhpDistrictBuildsCorrectly(): void
+{
+    $engine = $this->create3DTestEngine();
+    $engine->scenes->load(PhpDistrictScene::class);
+    $engine->tick(0.016);
+
+    $commands = $engine->renderer3d->getLastCommandList();
+    $draws = $commands->ofType(DrawMesh::class);
+
+    $this->assertCount(20, $draws); // 20 buildings
+    $this->assertSame('cobblestone', $draws[0]->materialId);
+}
+```
+
+Pixel-level VRT for 3D scenes (OpenGL framebuffer capture) is performed locally,
+not in CI headless mode.
+
+### VRT workflow (Playwright-style, 2D)
 
 ```php
 class MyGameTest extends TestCase {
@@ -305,24 +493,6 @@ tests/MyTest.php-snapshots/
 
 Default: **no platform suffix**. Override `usePlatformSuffix()` → `true` for
 font-dependent tests, which produces `name-gd-darwin.png` / `name-gd-linux.png`.
-
-### Scene rendering tests
-
-Use `renderScene()` or `createVisualTestEngine()` to load game scenes headlessly:
-
-```php
-// Quick: load scene, tick, render, screenshot
-[$engine, $renderer] = $this->renderScene(MainMenuScene::class, 'main-menu');
-$this->assertScreenshot($renderer, 'main-menu');
-
-// Full control: register textures, custom camera, multiple ticks
-[$engine, $renderer] = $this->createVisualTestEngine(800, 600);
-$tm = $engine->textures; // NullTextureManager in headless
-$tm->register('player', 32, 48);
-$tm->register('ground', 800, 100);
-// ... load scene, add render system, tick, render ...
-$this->assertScreenshot($renderer, 'gameplay');
-```
 
 ### Comparison parameters
 

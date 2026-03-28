@@ -19,5 +19,7 @@ class EngineConfig
         public readonly string $savePath = 'saves',
         public readonly int $maxSaveSlots = 10,
         public readonly bool $headless = false,
+        public readonly bool $is3D = false,
+        public readonly string $renderBackend3D = 'opengl',
     ) {}
 }

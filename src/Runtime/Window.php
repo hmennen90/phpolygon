@@ -32,7 +32,7 @@ class Window
         private bool $resizable = true,
     ) {}
 
-    public function initialize(InputInterface $input): void
+    public function initialize(Input $input): void
     {
         if (!glfwInit()) {
             throw new RuntimeException('Failed to initialize GLFW');
