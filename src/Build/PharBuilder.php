@@ -58,6 +58,16 @@ class PharBuilder
             copy($projectRoot . '/' . $entry, $stagingDir . '/' . $entry);
         }
 
+        // Stage additional requires (e.g. bootstrap_constants.php, helpers)
+        foreach ($this->config->additionalRequires as $require) {
+            $srcPath = $projectRoot . '/' . $require;
+            if (file_exists($srcPath)) {
+                $dstPath = $stagingDir . '/' . $require;
+                @mkdir(dirname($dstPath), 0755, true);
+                copy($srcPath, $dstPath);
+            }
+        }
+
         // Stage resource directories (exclude external ones)
         $resourcesDir = $projectRoot . '/resources';
         if (is_dir($resourcesDir)) {
