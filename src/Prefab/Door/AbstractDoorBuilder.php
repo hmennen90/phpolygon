@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace PHPolygon\Prefab\Door;
 
+use PHPolygon\Component\BodyType;
 use PHPolygon\Component\BoxCollider3D;
 use PHPolygon\Component\MeshRenderer;
+use PHPolygon\Component\RigidBody3D;
 use PHPolygon\Component\Transform3D;
 use PHPolygon\Math\Quaternion;
 use PHPolygon\Math\Vec3;
@@ -77,7 +79,8 @@ abstract class AbstractDoorBuilder
                 scale: new Vec3($width * 0.5, $height * 0.5, $thickness * 0.5),
             ))
             ->with(new MeshRenderer(meshId: 'box', materialId: $materialId))
-            ->with(new BoxCollider3D(size: new Vec3(2.0, 2.0, 2.0), isStatic: $isStatic));
+            ->with(new BoxCollider3D(size: new Vec3(2.0, 2.0, 2.0), isStatic: $isStatic))
+            ->with(new RigidBody3D(bodyType: BodyType::Kinematic));
     }
 
     /**

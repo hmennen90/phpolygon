@@ -52,13 +52,18 @@ class TableBuilder
         $names = [];
         $p = $this->prefix;
 
-        $topY = $position->y + $this->height * 0.5;
+        // Legs go from ground to (height - topThickness).
+        // Table top sits on top of the legs.
+        $legH = $this->height - $this->topThickness;
+        $topY = $position->y + $legH + $this->topThickness * 0.5;
+        $legCenterY = $position->y + $legH * 0.5;
         $topMesh = $this->shape === 'round' ? 'cylinder' : 'box';
 
-        // Table top
+        // Table top — sits on top of legs
+        $topPos = $position->add($rotation->rotateVec3(new Vec3(0.0, $topY - $position->y, 0.0)));
         $builder->entity($p . '_TableTop')
             ->with(new Transform3D(
-                position: new Vec3($position->x, $topY, $position->z),
+                position: $topPos,
                 rotation: $rotation,
                 scale: new Vec3($this->width * 0.5, $this->topThickness * 0.5, $this->depth * 0.5),
             ))
@@ -68,29 +73,28 @@ class TableBuilder
 
         if ($this->shape === 'round') {
             // Single center pedestal
+            $pedPos = $position->add($rotation->rotateVec3(new Vec3(0.0, $legCenterY - $position->y, 0.0)));
             $builder->entity($p . '_TableLeg')
                 ->with(new Transform3D(
-                    position: new Vec3($position->x, $position->y + $this->height * 0.25, $position->z),
+                    position: $pedPos,
                     rotation: $rotation,
-                    scale: new Vec3($this->legThickness, $this->height * 0.25, $this->legThickness),
+                    scale: new Vec3($this->legThickness, $legH * 0.5, $this->legThickness),
                 ))
                 ->with(new MeshRenderer(meshId: 'cylinder', materialId: $materials->secondary));
             $names[] = $p . '_TableLeg';
         } else {
-            // 4 legs at corners
+            // 4 legs at corners — from ground to underside of top
             $hx = ($this->width * 0.5 - $this->legThickness) * 0.9;
             $hz = ($this->depth * 0.5 - $this->legThickness) * 0.9;
-            $legY = $position->y + $this->height * 0.25;
-            $legH = ($this->height - $this->topThickness) * 0.5;
 
             $offsets = [[-$hx, -$hz], [$hx, -$hz], [-$hx, $hz], [$hx, $hz]];
             foreach ($offsets as $i => [$ox, $oz]) {
-                $legPos = $position->add($rotation->rotateVec3(new Vec3($ox, $legY - $position->y, $oz)));
+                $legPos = $position->add($rotation->rotateVec3(new Vec3($ox, $legCenterY - $position->y, $oz)));
                 $builder->entity("{$p}_TableLeg_{$i}")
                     ->with(new Transform3D(
                         position: $legPos,
                         rotation: $rotation,
-                        scale: new Vec3($this->legThickness * 0.5, $legH, $this->legThickness * 0.5),
+                        scale: new Vec3($this->legThickness * 0.5, $legH * 0.5, $this->legThickness * 0.5),
                     ))
                     ->with(new MeshRenderer(meshId: 'cylinder', materialId: $materials->secondary));
                 $names[] = "{$p}_TableLeg_{$i}";
