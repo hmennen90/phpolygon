@@ -7,9 +7,18 @@ in vec2 v_uv;
 uniform vec3 u_ambient_color;
 uniform float u_ambient_intensity;
 
-uniform vec3 u_dir_light_direction;
-uniform vec3 u_dir_light_color;
-uniform float u_dir_light_intensity;
+struct DirLight {
+    vec3 direction;
+    vec3 color;
+    float intensity;
+};
+uniform DirLight u_dir_lights[16];
+uniform int u_dir_light_count;
+
+// Legacy single-light aliases (used by shadow map and some proc modes)
+#define u_dir_light_direction u_dir_lights[0].direction
+#define u_dir_light_color u_dir_lights[0].color
+#define u_dir_light_intensity u_dir_lights[0].intensity
 
 struct PointLight {
     vec3 position;
@@ -33,6 +42,27 @@ uniform vec3 u_camera_pos;
 uniform float u_time;
 // Procedural material modes: 0=standard, 1=sand terrain, 2=water, 3=rock, 4=palm trunk, 5=palm leaf
 uniform int u_proc_mode;
+
+// Environment reflection
+uniform samplerCube u_environment_map;
+uniform int u_has_environment_map;
+uniform vec3 u_sky_color;
+uniform vec3 u_horizon_color;
+
+// Shadow mapping
+uniform sampler2DShadow u_shadow_map;
+uniform mat4 u_light_space_matrix;
+uniform int u_has_shadow_map;
+
+// Cloud shadow map (opacity-based, separate from depth shadow)
+uniform sampler2D u_cloud_shadow_map;
+uniform int u_has_cloud_shadow;
+
+// Moon phase for procedural moon shader
+uniform float u_moon_phase;
+
+// Seasonal tint applied to terrain and vegetation
+uniform vec3 u_season_tint; // multiplied with base colors (1,1,1 = no change)
 
 out vec4 frag_color;
 
@@ -74,6 +104,68 @@ float fbm(vec2 p, int octaves) {
         amp *= 0.5;
     }
     return value;
+}
+
+// ================================================================
+//  Shadow calculation
+// ================================================================
+
+float calcShadow(vec3 worldPos) {
+    if (u_has_shadow_map == 0 && u_has_cloud_shadow == 0) return 1.0;
+
+    vec4 lightSpacePos = u_light_space_matrix * vec4(worldPos, 1.0);
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    // Outside shadow map → no shadow
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z > 1.0) return 1.0;
+
+    float shadow = 1.0;
+
+    // Geometry shadow (depth-based, PCF 3×3)
+    if (u_has_shadow_map == 1) {
+        float geomShadow = 0.0;
+        float texelSize = 1.0 / 2048.0;
+        float bias = 0.002;
+        float refDepth = projCoords.z - bias;
+
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                vec2 offset = vec2(float(x), float(y)) * texelSize;
+                geomShadow += texture(u_shadow_map, vec3(projCoords.xy + offset, refDepth));
+            }
+        }
+        geomShadow /= 9.0;
+        shadow *= geomShadow;
+    }
+
+    // Cloud shadow (opacity-based, wide soft blur for realistic cloud penumbra)
+    if (u_has_cloud_shadow == 1) {
+        float cloudShadow = 0.0;
+        float cloudTexelSize = 1.0 / 1024.0;
+
+        // Large 5×5 Gaussian-weighted blur for soft cloud shadow edges
+        // Weights: center=4, adjacent=2, diagonal=1 (total 48)
+        float weights[5] = float[](1.0, 2.0, 4.0, 2.0, 1.0);
+        float totalWeight = 0.0;
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                float w = weights[x + 2] * weights[y + 2];
+                vec2 offset = vec2(float(x), float(y)) * cloudTexelSize * 3.0; // 3× spread for wider blur
+                float cloudAlpha = texture(u_cloud_shadow_map, projCoords.xy + offset).r;
+                cloudShadow += cloudAlpha * w;
+                totalWeight += w;
+            }
+        }
+        cloudShadow /= totalWeight;
+
+        // Cloud opacity attenuates sunlight (0 = fully blocked, 1 = no cloud)
+        shadow *= (1.0 - cloudShadow * 0.7); // Clouds don't block 100% — some light scatters through
+    }
+
+    return shadow;
 }
 
 // ================================================================
@@ -129,6 +221,9 @@ vec3 computeSand(vec3 N, vec3 V, vec3 L, out float roughOut) {
     float vi = variant * 3.0;
     int idx = int(floor(vi));
     vec3 baseColor = mix(colors[clamp(idx, 0, 3)], colors[clamp(idx + 1, 0, 3)], fract(vi));
+
+    // Seasonal tint modulates terrain color
+    baseColor *= u_season_tint;
 
     // Multi-scale noise — creates natural organic sand pattern
     float n1 = fbm(v_worldPos.xz * 1.5, 3);          // large color patches
@@ -219,12 +314,19 @@ vec3 computeWater(vec3 N, vec3 V, vec3 L, out float alphaOut, out float roughOut
     vec3 deepColor    = vec3(0.02, 0.08, 0.15);   // dark navy
     vec3 waterColor   = mix(shallowColor, deepColor, depth);
 
-    // Sky reflection color (simplified — sample from sun direction)
-    vec3 skyReflect = vec3(0.55, 0.70, 0.85); // blue sky
-    vec3 sunReflect = vec3(1.0, 0.95, 0.8);   // sun highlight area
+    // Reflection — cubemap or sky color fallback
     vec3 R = reflect(-V, N);
+    vec3 reflectColor;
+    if (u_has_environment_map == 1) {
+        reflectColor = texture(u_environment_map, R).rgb;
+    } else {
+        // Blend between horizon (low R.y) and sky (high R.y) based on reflection direction
+        float skyBlend = clamp(R.y * 2.0, 0.0, 1.0);
+        reflectColor = mix(u_horizon_color, u_sky_color, skyBlend);
+    }
+    // Sun hotspot on reflection
     float sunCatch = pow(max(dot(R, L), 0.0), 256.0);
-    vec3 reflectColor = mix(skyReflect, sunReflect, sunCatch * 2.0);
+    reflectColor = mix(reflectColor, u_dir_light_color, sunCatch * 2.0);
 
     // Combine: fresnel blends between water body color and reflection
     vec3 finalColor = mix(waterColor, reflectColor, fresnel);
@@ -598,6 +700,39 @@ void main() {
         frag_color = vec4(color, alpha);
         return;
 
+    } else if (u_proc_mode == 9) {
+        // Moon — procedural phase rendering
+        vec3 moonN = normalize(N);
+
+        // Build view-space right vector for terminator direction
+        vec3 vUp = abs(V.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+        vec3 viewRight = normalize(cross(V, vUp));
+
+        // Local X on moon face: -1 = left, +1 = right (from camera's perspective)
+        float localX = dot(moonN, viewRight);
+
+        // Terminator sweeps with phase:
+        // 0.0 = new moon (all dark), 0.5 = full (all lit), 1.0 = new again
+        float terminatorPos = cos(u_moon_phase * 2.0 * 3.14159);
+        float illumination = smoothstep(terminatorPos - 0.12, terminatorPos + 0.12, localX);
+
+        // Moon surface with procedural craters
+        vec3 objPos = moonN;
+        float crater = noise(objPos.xz * 4.0 + objPos.y * 2.0);
+        float mare = smoothstep(0.42, 0.55, crater) * 0.25;
+        float detail = (noise(objPos.xz * 12.0 + objPos.yz * 8.0) - 0.5) * 0.08;
+        vec3 moonColor = vec3(0.85, 0.87, 0.92) * (1.0 - mare) + detail;
+
+        // Apply illumination (no limb darkening — caused the blackout)
+        vec3 litColor = moonColor * illumination;
+
+        // Earthshine: faint blue on dark side
+        litColor += vec3(0.02, 0.025, 0.04) * (1.0 - illumination);
+
+        // Gamma, no fog
+        frag_color = vec4(pow(max(litColor, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        return;
+
     } else {
         // Standard material
         float nse = noise(v_worldPos.xz * 0.4);
@@ -607,21 +742,47 @@ void main() {
 
     // ---- PBR Lighting (sand + standard materials) ----
     float shininess = exp2(10.0 * (1.0 - roughness) + 1.0);
-    H = normalize(V + L);
 
     vec3 F0 = mix(vec3(0.04), albedo, u_metallic);
-    float NdotL = max(dot(N, L), 0.0);
 
-    // Ambient
-    vec3 color = u_ambient_color * u_ambient_intensity * albedo * (1.0 - u_metallic * 0.9);
+    // Shadow factor (from primary light — index 0)
+    float shadow = calcShadow(v_worldPos);
 
-    // Directional light
-    if (NdotL > 0.0) {
-        color += albedo * u_dir_light_color * u_dir_light_intensity * NdotL * (1.0 - u_metallic);
-        float NdotH = max(dot(N, H), 0.0);
-        float spec = pow(NdotH, shininess) * (shininess + 2.0) / 8.0;
-        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-        color += F * u_dir_light_color * u_dir_light_intensity * spec * NdotL;
+    // Ambient shadow strength scales with light intensity.
+    // Strong shadows in bright sunlight, subtle in moonlight.
+    float primaryIntensity = u_dir_light_count > 0 ? u_dir_lights[0].intensity : 0.0;
+    float shadowStrength = clamp(primaryIntensity / 1.0, 0.0, 1.0); // 0 at night, 1 at noon
+    float ambientShadow = mix(1.0, mix(0.5, 1.0, shadow), shadowStrength);
+    vec3 color = u_ambient_color * u_ambient_intensity * albedo * (1.0 - u_metallic * 0.9) * ambientShadow;
+
+    // All directional lights (with Half-Lambert wrap for terrain/sand)
+    for (int dl = 0; dl < u_dir_light_count; dl++) {
+        vec3 dL = normalize(-u_dir_lights[dl].direction);
+        vec3 dH = normalize(V + dL);
+        float rawNdotL = dot(N, dL);
+        float dNdotL = max(rawNdotL, 0.0);
+
+        // Half-Lambert: wraps lighting around surfaces so horizontal terrain
+        // still receives light at low sun angles (sunrise/sunset golden glow).
+        // Standard: max(NdotL, 0) gives 0 at 90°.
+        // Half-Lambert: (NdotL * 0.5 + 0.5)² gives 0.25 at 90° — much softer.
+        float halfLambert = rawNdotL * 0.5 + 0.5;
+        halfLambert *= halfLambert;
+        // Blend: use half-Lambert for diffuse, standard NdotL for specular
+        float diffuseNdotL = mix(dNdotL, halfLambert, 0.4); // 40% wrap
+
+        // Shadow only applies to primary light (index 0)
+        float dShadow = (dl == 0) ? shadow : 1.0;
+
+        if (diffuseNdotL > 0.0) {
+            color += albedo * u_dir_lights[dl].color * u_dir_lights[dl].intensity * diffuseNdotL * dShadow * (1.0 - u_metallic);
+        }
+        if (dNdotL > 0.0) {
+            float dNdotH = max(dot(N, dH), 0.0);
+            float spec = pow(dNdotH, shininess) * (shininess + 2.0) / 8.0;
+            vec3 F = fresnelSchlick(max(dot(dH, V), 0.0), F0);
+            color += F * u_dir_lights[dl].color * u_dir_lights[dl].intensity * spec * dNdotL * dShadow;
+        }
     }
 
     // Point lights

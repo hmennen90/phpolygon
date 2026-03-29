@@ -43,6 +43,18 @@ class DayNightCycle extends AbstractComponent
     #[Property]
     public float $dayCount;
 
+    /** Seasonal sun axis tilt in degrees (set by EnvironmentalSystem) */
+    #[Hidden]
+    public float $axialTilt = 0.0;
+
+    /** Cloud-based sun darkening factor 0–1 (set by EnvironmentalSystem) */
+    #[Hidden]
+    public float $cloudDarkening = 0.0;
+
+    /** Lightning flash intensity 0–1 (set by EnvironmentalSystem) */
+    #[Hidden]
+    public float $lightningFlash = 0.0;
+
     public function __construct(
         float $timeOfDay = 0.35,
         float $dayDuration = 600.0,
@@ -74,7 +86,7 @@ class DayNightCycle extends AbstractComponent
      */
     public function getSunElevation(): float
     {
-        return sin($this->timeOfDay * 2.0 * M_PI - M_PI * 0.5) * 80.0;
+        return sin($this->timeOfDay * 2.0 * M_PI - M_PI * 0.5) * 80.0 + $this->axialTilt;
     }
 
     /**

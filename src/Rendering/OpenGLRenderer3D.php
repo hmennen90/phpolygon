@@ -67,6 +67,9 @@ class OpenGLRenderer3D implements Renderer3DInterface
     /** @var array<string, int> GL cubemap texture IDs */
     private array $cubemapCache = [];
 
+    private int $dirLightCount = 0;
+    /** @var list<array{dir: float[], color: float[], intensity: float}> */
+    private array $dirLights = [];
     private int $pointLightCount = 0;
 
     /** @var array<int, array{pos: float[], color: float[], intensity: float, radius: float}> */
@@ -82,6 +85,11 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
     /** Global time for shader animations (seconds since start) */
     private float $globalTime = 0.0;
+    private int $dummyCubemap = 0;
+    private int $dummyDepthTex = 0;
+    private int $dummyCloudTex = 0;
+    private ?ShadowMapRenderer $shadowMap = null;
+    private ?CloudShadowRenderer $cloudShadow = null;
 
     public function __construct(int $width = 1280, int $height = 720)
     {
@@ -136,9 +144,9 @@ class OpenGLRenderer3D implements Renderer3DInterface
         // Defaults
         $this->setUniformVec3('u_ambient_color', [1.0, 1.0, 1.0]);
         $this->setUniformFloat('u_ambient_intensity', 0.1);
-        $this->setUniformVec3('u_dir_light_direction', [0.0, -1.0, 0.0]);
-        $this->setUniformVec3('u_dir_light_color', [1.0, 1.0, 1.0]);
-        $this->setUniformFloat('u_dir_light_intensity', 0.0);
+        $this->dirLightCount = 0;
+        $this->dirLights = [];
+        $this->setUniformInt('u_dir_light_count', 0);
         $this->setUniformFloat('u_fog_near', 50.0);
         $this->setUniformFloat('u_fog_far', 200.0);
         $this->setUniformVec3('u_fog_color', [0.5, 0.5, 0.5]);
@@ -148,6 +156,25 @@ class OpenGLRenderer3D implements Renderer3DInterface
         if ($this->useInstancingLoc >= 0) {
             glUniform1i($this->useInstancingLoc, 0);
         }
+
+        // Re-bind dummy textures (created during shader init) and reset flags
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, $this->dummyCubemap);
+        $this->setUniformInt('u_has_environment_map', 0);
+        $this->setUniformVec3('u_sky_color', [0.55, 0.70, 0.85]);
+        $this->setUniformVec3('u_horizon_color', [0.53, 0.68, 0.80]);
+
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyDepthTex);
+        $this->setUniformInt('u_has_shadow_map', 0);
+
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyCloudTex);
+        $this->setUniformInt('u_has_cloud_shadow', 0);
+
+        glActiveTexture(GL_TEXTURE0);
+        $this->setUniformFloat('u_moon_phase', 0.5);
+        $this->setUniformVec3('u_season_tint', [1.0, 1.0, 1.0]); // no tint by default
 
         // Time + wave animation defaults
         $this->globalTime += 0.016; // ~60fps increment
@@ -174,10 +201,14 @@ class OpenGLRenderer3D implements Renderer3DInterface
                 $this->setUniformVec3('u_ambient_color', [$command->color->r, $command->color->g, $command->color->b]);
                 $this->setUniformFloat('u_ambient_intensity', $command->intensity);
 
-            } elseif ($command instanceof SetDirectionalLight) {
-                $this->setUniformVec3('u_dir_light_direction', [$command->direction->x, $command->direction->y, $command->direction->z]);
-                $this->setUniformVec3('u_dir_light_color', [$command->color->r, $command->color->g, $command->color->b]);
-                $this->setUniformFloat('u_dir_light_intensity', $command->intensity);
+            } elseif ($command instanceof SetDirectionalLight && $this->dirLightCount < 16) {
+                $i = $this->dirLightCount;
+                $this->dirLights[$i] = [
+                    'dir' => [$command->direction->x, $command->direction->y, $command->direction->z],
+                    'color' => [$command->color->r, $command->color->g, $command->color->b],
+                    'intensity' => $command->intensity,
+                ];
+                $this->dirLightCount++;
 
             } elseif ($command instanceof AddPointLight && $this->pointLightCount < 8) {
                 $this->pointLights[$this->pointLightCount] = [
@@ -195,7 +226,26 @@ class OpenGLRenderer3D implements Renderer3DInterface
 
             } elseif ($command instanceof SetSkybox) {
                 $this->pendingSkyboxId = $command->cubemapId;
+
+            } elseif ($command instanceof Command\SetSkyColors) {
+                $this->setUniformVec3('u_sky_color', [$command->skyColor->r, $command->skyColor->g, $command->skyColor->b]);
+                $this->setUniformVec3('u_horizon_color', [$command->horizonColor->r, $command->horizonColor->g, $command->horizonColor->b]);
+
+            } elseif ($command instanceof Command\SetEnvironmentMap) {
+                glActiveTexture(GL_TEXTURE5);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, $command->textureId);
+                $this->setUniformInt('u_environment_map', 5);
+                $this->setUniformInt('u_has_environment_map', 1);
             }
+        }
+
+        // Upload directional lights
+        $this->setUniformInt('u_dir_light_count', $this->dirLightCount);
+        for ($i = 0; $i < $this->dirLightCount; $i++) {
+            $dl = $this->dirLights[$i];
+            $this->setUniformVec3("u_dir_lights[{$i}].direction", $dl['dir']);
+            $this->setUniformVec3("u_dir_lights[{$i}].color", $dl['color']);
+            $this->setUniformFloat("u_dir_lights[{$i}].intensity", $dl['intensity']);
         }
 
         // Upload point lights
@@ -206,6 +256,30 @@ class OpenGLRenderer3D implements Renderer3DInterface
             $this->setUniformVec3("u_point_lights[{$i}].color", $pl['color']);
             $this->setUniformFloat("u_point_lights[{$i}].intensity", $pl['intensity']);
             $this->setUniformFloat("u_point_lights[{$i}].radius", $pl['radius']);
+        }
+
+        // Shadow map pass: render scene depth from sun's perspective
+        $this->renderShadowMap($commandList);
+
+        // Restore main viewport, camera, and lights after shadow pass
+        glViewport(0, 0, $this->width, $this->height);
+        foreach ($commandList->getCommands() as $command) {
+            if ($command instanceof SetCamera) {
+                $this->setUniformMat4('u_view', $command->viewMatrix);
+                $this->setUniformMat4('u_projection', $command->projectionMatrix);
+                $cameraPos = $command->viewMatrix->inverse()->getTranslation();
+                $this->setUniformVec3('u_camera_pos', [$cameraPos->x, $cameraPos->y, $cameraPos->z]);
+                break;
+            }
+        }
+
+        // Re-upload directional lights (shadow pass zeroed them)
+        $this->setUniformInt('u_dir_light_count', $this->dirLightCount);
+        for ($i = 0; $i < $this->dirLightCount; $i++) {
+            $dl = $this->dirLights[$i];
+            $this->setUniformVec3("u_dir_lights[{$i}].direction", $dl['dir']);
+            $this->setUniformVec3("u_dir_lights[{$i}].color", $dl['color']);
+            $this->setUniformFloat("u_dir_lights[{$i}].intensity", $dl['intensity']);
         }
 
         // Pass 2a: opaque
@@ -440,28 +514,35 @@ class OpenGLRenderer3D implements Renderer3DInterface
         $this->expandedVertexCount[$meshId] = $indexCount;
     }
 
+    /** @var array<string, int> Material prefix → proc_mode cache */
+    private static array $procModeCache = [];
+
     private function applyMaterial(string $materialId): void
     {
-        // Procedural material mode: 0=standard, 1=sand, 2=water, 3=rock, 4=palm trunk, 5=palm leaf
-        $procMode = 0;
-        if (str_starts_with($materialId, 'sand_terrain')) {
-            $procMode = 1;
-        } elseif (str_starts_with($materialId, 'water_')) {
-            $procMode = 2;
-        } elseif (str_starts_with($materialId, 'rock')) {
-            $procMode = 3;
-        } elseif (str_starts_with($materialId, 'palm_trunk')) {
-            $procMode = 4;
-        } elseif (str_starts_with($materialId, 'hut_wood') || str_starts_with($materialId, 'hut_door') || str_starts_with($materialId, 'hut_table') || str_starts_with($materialId, 'hut_chair') || str_starts_with($materialId, 'hut_floor') || str_starts_with($materialId, 'hut_window')) {
-            $procMode = 7;
-        } elseif (str_starts_with($materialId, 'hut_thatch')) {
-            $procMode = 8;
-        } elseif (str_starts_with($materialId, 'palm_branch') || str_starts_with($materialId, 'palm_leaves') || str_starts_with($materialId, 'palm_leaf') || str_starts_with($materialId, 'palm_canopy') || str_starts_with($materialId, 'palm_frond')) {
-            $procMode = 5;
-        } elseif (str_starts_with($materialId, 'cloud_')) {
-            $procMode = 6;
-        }
+        // Procedural material mode — cached lookup by prefix
+        $procMode = self::$procModeCache[$materialId] ?? $this->resolveProcMode($materialId);
         $this->setUniformInt('u_proc_mode', $procMode);
+
+        // Moon phase: encoded in roughness of moon_disc material by DayNightSystem
+        if ($procMode === 9) {
+            $mat = MaterialRegistry::get($materialId);
+            $this->setUniformFloat('u_moon_phase', $mat !== null ? $mat->roughness : 0.5);
+        }
+
+        // Sand terrain: pass albedo as season tint (shader multiplies with hardcoded base colors)
+        if ($procMode === 1) {
+            $mat = MaterialRegistry::get($materialId);
+            if ($mat !== null) {
+                // Normalize: default sand color is ~(0.77, 0.66, 0.41). Tint = actual / default.
+                $this->setUniformVec3('u_season_tint', [
+                    $mat->albedo->r / 0.77,
+                    $mat->albedo->g / 0.66,
+                    $mat->albedo->b / 0.41,
+                ]);
+            }
+        } else {
+            $this->setUniformVec3('u_season_tint', [1.0, 1.0, 1.0]);
+        }
 
         $material = MaterialRegistry::get($materialId);
         if ($material !== null) {
@@ -477,6 +558,40 @@ class OpenGLRenderer3D implements Renderer3DInterface
             $this->setUniformFloat('u_metallic', 0.0);
             $this->setUniformFloat('u_alpha', 1.0);
         }
+    }
+
+    /**
+     * Resolve proc_mode from material ID prefix. Result is cached for performance.
+     */
+    private function resolveProcMode(string $materialId): int
+    {
+        // Extract prefix (first segment before '_' + number, or full ID)
+        $prefix = strtok($materialId, '0123456789');
+
+        $mode = match (true) {
+            str_starts_with($prefix, 'sand_terrain') => 1,
+            str_starts_with($prefix, 'water_') => 2,
+            str_starts_with($prefix, 'rock') => 3,
+            str_starts_with($prefix, 'palm_trunk') => 4,
+            str_starts_with($prefix, 'palm_branch'),
+            str_starts_with($prefix, 'palm_leaves'),
+            str_starts_with($prefix, 'palm_leaf'),
+            str_starts_with($prefix, 'palm_canopy'),
+            str_starts_with($prefix, 'palm_frond') => 5,
+            str_starts_with($prefix, 'cloud_') => 6,
+            str_starts_with($prefix, 'hut_wood'),
+            str_starts_with($prefix, 'hut_door'),
+            str_starts_with($prefix, 'hut_table'),
+            str_starts_with($prefix, 'hut_chair'),
+            str_starts_with($prefix, 'hut_floor'),
+            str_starts_with($prefix, 'hut_window') => 7,
+            str_starts_with($prefix, 'hut_thatch') => 8,
+            str_starts_with($prefix, 'moon_disc') => 9,
+            default => 0,
+        };
+
+        self::$procModeCache[$materialId] = $mode;
+        return $mode;
     }
 
     private function uploadMesh(string $meshId, MeshData $meshData): void
@@ -578,6 +693,49 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glDeleteShader($frag);
 
         $this->shaderProgram = $program;
+
+        // Create dummy textures and bind samplers immediately after linking.
+        // This prevents "unloadable texture" warnings on the first frame.
+        glUseProgram($program);
+
+        // Dummy cubemap (1×1, for u_environment_map on unit 5)
+        glGenTextures(1, $dcm);
+        $this->dummyCubemap = $dcm;
+        glBindTexture(GL_TEXTURE_CUBE_MAP, $this->dummyCubemap);
+        for ($face = 0; $face < 6; $face++) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + $face, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, null);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, $this->dummyCubemap);
+        $this->setUniformInt('u_environment_map', 5);
+
+        // Dummy depth texture (1×1, for u_shadow_map on unit 6)
+        glGenTextures(1, $ddt);
+        $this->dummyDepthTex = $ddt;
+        glBindTexture(GL_TEXTURE_2D, $this->dummyDepthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, 1, 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, null);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyDepthTex);
+        $this->setUniformInt('u_shadow_map', 6);
+
+        // Dummy cloud shadow (1×1, for u_cloud_shadow_map on unit 7)
+        glGenTextures(1, $dcs);
+        $this->dummyCloudTex = $dcs;
+        glBindTexture(GL_TEXTURE_2D, $this->dummyCloudTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, null);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyCloudTex);
+        $this->setUniformInt('u_cloud_shadow_map', 7);
+
+        glActiveTexture(GL_TEXTURE0);
     }
 
     private function loadShaderSource(string $path): string
@@ -751,6 +909,158 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
         $this->cubemapCache[$cubemapId] = $texId;
         return $texId;
+    }
+
+    /**
+     * Render shadow map from directional light's perspective.
+     * Uses a simple depth-only pass with the same meshes as the main scene.
+     */
+    private function renderShadowMap(RenderCommandList $commandList): void
+    {
+        // Lazy-init shadow map
+        if ($this->shadowMap === null) {
+            $this->shadowMap = new ShadowMapRenderer(resolution: 2048);
+            $this->shadowMap->initialize();
+        }
+
+        // Use the BRIGHTEST directional light for shadow casting (sun by day, moon by night)
+        $lightDir = null;
+        $lightIntensity = 0.0;
+        foreach ($commandList->getCommands() as $command) {
+            if ($command instanceof SetDirectionalLight && $command->intensity > $lightIntensity) {
+                $lightDir = $command->direction;
+                $lightIntensity = $command->intensity;
+            }
+        }
+
+        // No shadows when no light or too dim
+        if ($lightDir === null || $lightIntensity < 0.05) {
+            $this->setUniformInt('u_has_shadow_map', 0);
+            return;
+        }
+
+        // Update light-space matrix
+        $this->shadowMap->updateLightMatrix($lightDir);
+
+        // Ensure all sampler units have valid textures during shadow passes
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyDepthTex);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, $this->dummyCloudTex);
+        glActiveTexture(GL_TEXTURE0);
+
+        // Shadow pass: render depth only
+        $this->shadowMap->beginShadowPass();
+        glUseProgram($this->shaderProgram);
+
+        // Set light-space matrix as view+projection for shadow pass
+        $lsm = $this->shadowMap->getLightSpaceMatrix();
+        $this->setUniformMat4('u_view', $lsm);
+        $this->setUniformMat4('u_projection', \PHPolygon\Math\Mat4::identity());
+
+        // Disable all fancy rendering for depth pass
+        $this->setUniformInt('u_proc_mode', 0);
+        $this->setUniformFloat('u_alpha', 1.0);
+        $this->setUniformInt('u_vertex_anim', 0);
+        $this->setUniformInt('u_dir_light_count', 0);
+        $this->setUniformInt('u_has_shadow_map', 0);
+        $this->setUniformInt('u_has_cloud_shadow', 0);
+
+        // Draw only opaque geometry
+        foreach ($commandList->getCommands() as $command) {
+            if ($command instanceof DrawMesh) {
+                $mat = MaterialRegistry::get($command->materialId);
+                // Skip sky, clouds, transparent — only solid geometry casts shadows
+                if ($mat !== null && $mat->alpha >= 0.9) {
+                    $matId = $command->materialId;
+                    // Skip emission-only materials (sky, sun, moon, clouds)
+                    if (str_starts_with($matId, 'sky_') || str_starts_with($matId, 'sun_')
+                        || str_starts_with($matId, 'moon_') || str_starts_with($matId, 'cloud_')
+                        || $matId === 'precipitation') {
+                        continue;
+                    }
+                    $this->setUniformMat4('u_model', $command->modelMatrix);
+                    $meshData = MeshRegistry::get($command->meshId);
+                    if ($meshData === null) continue;
+                    if (!isset($this->vaoCache[$command->meshId])) {
+                        $this->uploadMesh($command->meshId, $meshData);
+                    }
+                    if ($this->useInstancingLoc >= 0) {
+                        glUniform1i($this->useInstancingLoc, 0);
+                    }
+                    glBindVertexArray($this->vaoCache[$command->meshId]);
+                    glDrawElements(GL_TRIANGLES, $this->indexCountCache[$command->meshId], GL_UNSIGNED_INT, 0);
+                    glBindVertexArray(0);
+                }
+            }
+        }
+
+        $this->shadowMap->endShadowPass();
+
+        // --- Cloud shadow pass: render cloud opacity from sun's perspective ---
+        if ($this->cloudShadow === null) {
+            $this->cloudShadow = new CloudShadowRenderer(resolution: 1024);
+            $this->cloudShadow->initialize();
+        }
+
+        $this->cloudShadow->beginPass();
+        glUseProgram($this->shaderProgram);
+
+        // Same light-space view as geometry shadows
+        $this->setUniformMat4('u_view', $lsm);
+        $this->setUniformMat4('u_projection', \PHPolygon\Math\Mat4::identity());
+        $this->setUniformInt('u_proc_mode', 0);
+        $this->setUniformInt('u_vertex_anim', 0);
+
+        // Render ONLY clouds — their alpha determines shadow opacity
+        $hasCloudGeometry = false;
+        foreach ($commandList->getCommands() as $command) {
+            if ($command instanceof DrawMesh) {
+                $matId = $command->materialId;
+                if (!str_starts_with($matId, 'cloud_')) continue;
+
+                $mat = MaterialRegistry::get($matId);
+                if ($mat === null) continue;
+
+                // Set cloud alpha as the output color (R channel = opacity)
+                $opacity = (1.0 - ($mat->alpha ?? 1.0)) * 0.5 + 0.1; // thicker clouds = more shadow
+                $this->setUniformVec3('u_albedo', [$opacity, $opacity, $opacity]);
+                $this->setUniformVec3('u_emission', [0.0, 0.0, 0.0]);
+                $this->setUniformFloat('u_alpha', 1.0);
+
+                $this->setUniformMat4('u_model', $command->modelMatrix);
+                $meshData = MeshRegistry::get($command->meshId);
+                if ($meshData === null) continue;
+                if (!isset($this->vaoCache[$command->meshId])) {
+                    $this->uploadMesh($command->meshId, $meshData);
+                }
+                if ($this->useInstancingLoc >= 0) {
+                    glUniform1i($this->useInstancingLoc, 0);
+                }
+                glBindVertexArray($this->vaoCache[$command->meshId]);
+                glDrawElements(GL_TRIANGLES, $this->indexCountCache[$command->meshId], GL_UNSIGNED_INT, 0);
+                glBindVertexArray(0);
+                $hasCloudGeometry = true;
+            }
+        }
+
+        $this->cloudShadow->endPass();
+
+        // Bind both shadow maps for main pass
+        glUseProgram($this->shaderProgram);
+        $this->shadowMap->bind(6);
+        $this->setUniformInt('u_shadow_map', 6);
+        $this->setUniformMat4('u_light_space_matrix', $lsm);
+        $this->setUniformInt('u_has_shadow_map', 1);
+
+        if ($hasCloudGeometry) {
+            $this->cloudShadow->bind(7);
+            $this->setUniformInt('u_cloud_shadow_map', 7);
+            $this->setUniformInt('u_has_cloud_shadow', 1);
+        }
+
+        // Restore depth buffer for main pass
+        glClear(GL_DEPTH_BUFFER_BIT);
     }
 
     private function renderSkybox(string $cubemapId): void

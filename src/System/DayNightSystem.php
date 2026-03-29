@@ -14,6 +14,7 @@ use PHPolygon\Math\Vec3;
 use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\Command\SetAmbientLight;
 use PHPolygon\Rendering\Command\SetFog;
+use PHPolygon\Rendering\Command\SetSkyColors;
 use PHPolygon\Rendering\Material;
 use PHPolygon\Rendering\MaterialRegistry;
 use PHPolygon\Rendering\RenderCommandList;
@@ -31,14 +32,18 @@ class DayNightSystem extends AbstractSystem
     /** @var array<int, array{time: float, r: float, g: float, b: float, intensity: float}> */
     private const SUN_KEYS = [
         ['time' => 0.0,  'r' => 0.0,  'g' => 0.0,  'b' => 0.0,  'intensity' => 0.0],   // midnight
-        ['time' => 0.2,  'r' => 1.0,  'g' => 0.53, 'b' => 0.27, 'intensity' => 0.3],   // dawn
-        ['time' => 0.25, 'r' => 1.0,  'g' => 0.67, 'b' => 0.33, 'intensity' => 0.8],   // sunrise
-        ['time' => 0.35, 'r' => 1.0,  'g' => 0.98, 'b' => 0.94, 'intensity' => 1.3],   // morning
-        ['time' => 0.5,  'r' => 1.0,  'g' => 0.98, 'b' => 0.94, 'intensity' => 1.5],   // noon
-        ['time' => 0.65, 'r' => 1.0,  'g' => 0.96, 'b' => 0.88, 'intensity' => 1.3],   // afternoon
-        ['time' => 0.75, 'r' => 1.0,  'g' => 0.4,  'b' => 0.2,  'intensity' => 0.8],   // sunset
-        ['time' => 0.8,  'r' => 0.8,  'g' => 0.27, 'b' => 0.13, 'intensity' => 0.3],   // dusk
-        ['time' => 0.9,  'r' => 0.0,  'g' => 0.0,  'b' => 0.0,  'intensity' => 0.0],   // night
+        ['time' => 0.15, 'r' => 0.0,  'g' => 0.0,  'b' => 0.0,  'intensity' => 0.0],   // late night
+        ['time' => 0.20, 'r' => 0.6,  'g' => 0.25, 'b' => 0.12, 'intensity' => 0.1],   // first light
+        ['time' => 0.25, 'r' => 1.0,  'g' => 0.53, 'b' => 0.27, 'intensity' => 0.4],   // dawn
+        ['time' => 0.30, 'r' => 1.0,  'g' => 0.67, 'b' => 0.33, 'intensity' => 0.8],   // sunrise
+        ['time' => 0.40, 'r' => 1.0,  'g' => 0.98, 'b' => 0.94, 'intensity' => 1.3],   // morning
+        ['time' => 0.50, 'r' => 1.0,  'g' => 0.98, 'b' => 0.94, 'intensity' => 1.5],   // noon
+        ['time' => 0.60, 'r' => 1.0,  'g' => 0.96, 'b' => 0.88, 'intensity' => 1.3],   // afternoon
+        ['time' => 0.70, 'r' => 1.0,  'g' => 0.65, 'b' => 0.40, 'intensity' => 1.0],   // golden hour
+        ['time' => 0.75, 'r' => 1.0,  'g' => 0.40, 'b' => 0.20, 'intensity' => 0.7],   // sunset
+        ['time' => 0.80, 'r' => 0.8,  'g' => 0.27, 'b' => 0.13, 'intensity' => 0.3],   // dusk
+        ['time' => 0.85, 'r' => 0.4,  'g' => 0.12, 'b' => 0.06, 'intensity' => 0.1],   // twilight
+        ['time' => 0.90, 'r' => 0.0,  'g' => 0.0,  'b' => 0.0,  'intensity' => 0.0],   // night
         ['time' => 1.0,  'r' => 0.0,  'g' => 0.0,  'b' => 0.0,  'intensity' => 0.0],   // wrap
     ];
 
@@ -124,16 +129,50 @@ class DayNightSystem extends AbstractSystem
         $sunDirY = -sin($elevRad);
         $sunDirZ = -cos($elevRad) * cos($azimRad);
 
+        // Pre-compute moon brightness (needed for moonlight directional light)
+        $moonBright = max(0.0, min(1.0, -$cycle->getSunElevation() / 20.0));
+        $moonPhase = $cycle->getMoonPhase();
+        $phaseBrightness = 0.3 + 0.7 * (1.0 - abs(cos($moonPhase * M_PI)));
+        $moonBright *= $phaseBrightness;
+
         // Update DirectionalLight components
         $sunColor = self::interpolateKeys(self::SUN_KEYS, $t);
+
+        // At night, the moon acts as a weak directional light (reflected sunlight).
+        $sunIntensityFinal = $sunColor['intensity'] * (1.0 - $cycle->cloudDarkening);
+
+        // Smooth blend between sunlight and moonlight.
+        // moonBlend: 0 = full sun, 1 = full moon.
+        // Wide transition range (0.0 – 0.8 sun intensity) with smoothstep for gradual crossfade.
+        $raw = 1.0 - min(1.0, max(0.0, $sunIntensityFinal / 0.8));
+        $moonBlend = $raw * $raw * (3.0 - 2.0 * $raw); // smoothstep
+        $moonBlend *= min(1.0, $moonBright / 0.1); // only blend in if moon is bright
+
+        // Moonlight parameters
+        $moonIntensity = 0.15 + $moonBright * 0.5;
+
+        // Blended primary light: lerp direction, color, intensity between sun and moon
+        $blendDirX = $sunDirX * (1.0 - $moonBlend) + (-$sunDirX) * $moonBlend;
+        $blendDirY = $sunDirY * (1.0 - $moonBlend) + (-$sunDirY) * $moonBlend;
+        $blendDirZ = $sunDirZ * (1.0 - $moonBlend) + (-$sunDirZ) * $moonBlend;
+        $blendR = $sunColor['r'] * (1.0 - $moonBlend) + 0.55 * $moonBlend;
+        $blendG = $sunColor['g'] * (1.0 - $moonBlend) + 0.60 * $moonBlend;
+        $blendB = $sunColor['b'] * (1.0 - $moonBlend) + 0.80 * $moonBlend;
+        $blendIntensity = $sunIntensityFinal * (1.0 - $moonBlend) + $moonIntensity * $moonBlend;
+
+        $isFirst = true;
         foreach ($world->query(DirectionalLight::class, Transform3D::class) as $entity) {
             $light = $entity->get(DirectionalLight::class);
-            // Only update the primary sun (highest intensity at noon)
-            if ($light->intensity >= 0.5 || $sunColor['intensity'] > 0.0) {
-                $light->direction = new Vec3($sunDirX, $sunDirY, $sunDirZ);
-                $light->color = new Color($sunColor['r'], $sunColor['g'], $sunColor['b']);
-                $light->intensity = $sunColor['intensity'];
-                break; // Only first directional light = sun
+
+            if ($isFirst) {
+                $light->direction = new Vec3($blendDirX, $blendDirY, $blendDirZ);
+                $light->color = new Color($blendR, $blendG, $blendB);
+                $light->intensity = $blendIntensity;
+                $isFirst = false;
+            } else {
+                // Fill light: scales with sun, very dim at night
+                $fillScale = max(0.02, $sunIntensityFinal / 1.5);
+                $light->intensity = 0.3 * $fillScale;
             }
         }
 
@@ -151,38 +190,24 @@ class DayNightSystem extends AbstractSystem
         $moonZ = $sunDirZ * $moonRadius;
         $moonVisible = $cycle->getSunElevation() < 5.0; // Moon visible when sun is low/below horizon
 
-        // Moon brightness: full at midnight, fades at dawn/dusk
-        $moonBright = max(0.0, min(1.0, -$cycle->getSunElevation() / 20.0));
+        // moonBright already computed above (with phase)
 
-        // Update moon material
+        // Moon disc uses proc_mode 9 (procedural phase shader).
+        // Phase value is encoded in roughness (read by renderer as u_moon_phase).
         MaterialRegistry::register('moon_disc', new Material(
-            albedo: new Color(0, 0, 0),
-            emission: new Color(0.85 * $moonBright, 0.88 * $moonBright, 0.95 * $moonBright),
+            albedo: new Color(0.85, 0.87, 0.92),
+            roughness: (float) $moonPhase, // shader reads this as u_moon_phase
         ));
         MaterialRegistry::register('moon_glow', new Material(
             albedo: new Color(0, 0, 0),
-            emission: new Color(0.3 * $moonBright, 0.35 * $moonBright, 0.5 * $moonBright),
-            alpha: 0.4,
+            emission: new Color(0.2 * $moonBright, 0.22 * $moonBright, 0.35 * $moonBright),
+            alpha: 0.08,
         ));
 
         $sunPos = $sunVisible ? new Vec3($sunWorldX, $sunWorldY, $sunWorldZ) : new Vec3(0.0, -100.0, 0.0);
         $moonPos = ($moonVisible && $moonY > 0) ? new Vec3($moonX, $moonY, $moonZ) : new Vec3(0.0, -100.0, 0.0);
 
-        // Moon phase determines shadow offset (0 = new moon / full shadow, 0.5 = full moon / no shadow)
-        $moonPhase = $cycle->getMoonPhase();
-        // Shadow offset: 0 at full moon (phase=0.5), max at new moon (phase=0 or 1)
-        // Direction: perpendicular to viewing angle, rotates with phase
-        $phaseAngle = $moonPhase * 2.0 * M_PI; // 0..2π over lunar cycle
-        $shadowDist = abs(cos($moonPhase * M_PI)) * 1.5; // 0 at full, 1.5 at new
-        $shadowOffX = cos($phaseAngle) * $shadowDist;
-        $shadowOffZ = sin($phaseAngle) * $shadowDist;
-        $moonShadowPos = ($moonVisible && $moonY > 0)
-            ? new Vec3($moonX + $shadowOffX, $moonY, $moonZ + $shadowOffZ)
-            : new Vec3(0.0, -100.0, 0.0);
-
-        // Moon brightness varies with phase (full = bright, new = dim)
-        $phaseBrightness = 0.3 + 0.7 * (1.0 - abs(cos($moonPhase * M_PI)));
-        $moonBright *= $phaseBrightness;
+        // Moon phase is rendered procedurally — no shadow sphere positioning needed
 
         foreach ($world->query(MeshRenderer::class, Transform3D::class) as $entity) {
             $mesh = $entity->get(MeshRenderer::class);
@@ -193,20 +218,43 @@ class DayNightSystem extends AbstractSystem
                 $entity->get(Transform3D::class)->position = $sunPos;
             }
 
-            // Moon layers
+            // Moon layers (disc uses proc_mode 9 for phase rendering)
             if ($mat === 'moon_disc' || $mat === 'moon_glow') {
                 $entity->get(Transform3D::class)->position = $moonPos;
-            }
-            if ($mat === 'moon_shadow') {
-                $entity->get(Transform3D::class)->position = $moonShadowPos;
             }
         }
 
         // --- Ambient light ---
         $ambient = self::interpolateKeys(self::AMBIENT_KEYS, $t);
+        // Cloud darkening
+        $ambientR = $ambient['r'] * (1.0 - $cycle->cloudDarkening * 0.5);
+        $ambientG = $ambient['g'] * (1.0 - $cycle->cloudDarkening * 0.5);
+        $ambientB = $ambient['b'] * (1.0 - $cycle->cloudDarkening * 0.5);
+        $ambientIntensity = $ambient['intensity'] * (1.0 - $cycle->cloudDarkening * 0.3);
+
+        // Moonlight: reflected sunlight creates faint blue-white ambient at night.
+        // Intensity scales with moon brightness (phase + elevation).
+        // Full moon at midnight ≈ 0.08 intensity, new moon ≈ 0.01.
+        if ($moonBright > 0.01) {
+            $moonAmbient = 0.05 + $moonBright * 0.12;
+            $ambientR = max($ambientR, 0.12 * $moonBright + 0.03);
+            $ambientG = max($ambientG, 0.14 * $moonBright + 0.04);
+            $ambientB = max($ambientB, 0.22 * $moonBright + 0.06);
+            $ambientIntensity = max($ambientIntensity, $moonAmbient);
+        }
+
+        // Lightning flash: brief white burst
+        if ($cycle->lightningFlash > 0.01) {
+            $flash = $cycle->lightningFlash;
+            $ambientR = min(1.0, $ambientR + $flash * 0.8);
+            $ambientG = min(1.0, $ambientG + $flash * 0.85);
+            $ambientB = min(1.0, $ambientB + $flash * 0.9);
+            $ambientIntensity = min(1.0, $ambientIntensity + $flash * 0.7);
+        }
+
         $this->commandList->add(new SetAmbientLight(
-            color: new Color($ambient['r'], $ambient['g'], $ambient['b']),
-            intensity: $ambient['intensity'],
+            color: new Color($ambientR, $ambientG, $ambientB),
+            intensity: $ambientIntensity,
         ));
 
         // --- Fog (matches horizon color) ---
@@ -217,6 +265,12 @@ class DayNightSystem extends AbstractSystem
             color: new Color($horizon['r'], $horizon['g'], $horizon['b']),
             near: $fogNear,
             far: $fogFar,
+        ));
+
+        // --- Sky colors for water reflection ---
+        $this->commandList->add(new SetSkyColors(
+            skyColor: new Color($horizon['r'] * 0.5 + 0.15, $horizon['g'] * 0.5 + 0.2, $horizon['b'] * 0.5 + 0.3),
+            horizonColor: new Color($horizon['r'], $horizon['g'], $horizon['b']),
         ));
 
         // --- Sky dome materials (update emission colors) ---
