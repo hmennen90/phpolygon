@@ -43,22 +43,37 @@ class BoxCollider3D extends AbstractComponent
     }
 
     /**
-     * Get the world-space AABB min/max from entity position.
+     * Get the world-space AABB min/max, accounting for entity rotation and scale.
+     * Transforms all 8 corners through the world matrix to compute a tight AABB.
      *
      * @return array{min: Vec3, max: Vec3}
      */
-    public function getWorldAABB(Vec3 $entityPosition): array
+    public function getWorldAABB(\PHPolygon\Math\Mat4 $worldMatrix): array
     {
-        $center = $entityPosition->add($this->offset);
-        $halfSize = new Vec3(
-            $this->size->x * 0.5,
-            $this->size->y * 0.5,
-            $this->size->z * 0.5,
-        );
+        $hx = $this->size->x * 0.5;
+        $hy = $this->size->y * 0.5;
+        $hz = $this->size->z * 0.5;
+        $off = $this->offset;
+
+        $minX = PHP_FLOAT_MAX; $minY = PHP_FLOAT_MAX; $minZ = PHP_FLOAT_MAX;
+        $maxX = -PHP_FLOAT_MAX; $maxY = -PHP_FLOAT_MAX; $maxZ = -PHP_FLOAT_MAX;
+
+        foreach ([[-1, 1], [1, 1], [-1, -1], [1, -1]] as [$sx, $sz]) {
+            foreach ([-1, 1] as $sy) {
+                $corner = $worldMatrix->transformPoint(new Vec3(
+                    $off->x + $sx * $hx,
+                    $off->y + $sy * $hy,
+                    $off->z + $sz * $hz,
+                ));
+                $minX = min($minX, $corner->x); $maxX = max($maxX, $corner->x);
+                $minY = min($minY, $corner->y); $maxY = max($maxY, $corner->y);
+                $minZ = min($minZ, $corner->z); $maxZ = max($maxZ, $corner->z);
+            }
+        }
 
         return [
-            'min' => $center->sub($halfSize),
-            'max' => $center->add($halfSize),
+            'min' => new Vec3($minX, $minY, $minZ),
+            'max' => new Vec3($maxX, $maxY, $maxZ),
         ];
     }
 }
