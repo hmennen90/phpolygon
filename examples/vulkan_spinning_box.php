@@ -25,7 +25,7 @@ use PHPolygon\Geometry\BoxMesh;
 use PHPolygon\Geometry\MeshRegistry;
 use PHPolygon\Math\Quaternion;
 use PHPolygon\Math\Vec3;
-use PHPolygon\Rendering\Command\SetAmbientLight;
+use PHPolygon\Rendering\Command\SetSkyColors;
 use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\Material;
 use PHPolygon\Rendering\MaterialRegistry;
@@ -56,6 +56,12 @@ $engine->onInit(function () use ($engine): void {
 
     // Systems
     $engine->world->addSystem(new Camera3DSystem($commandList, 1280, 720));
+
+    $commandList->add(new SetSkyColors(
+        skyColor:     new Color(0.15, 0.25, 0.45),
+        horizonColor: new Color(0.55, 0.65, 0.80),
+    ));
+
     $engine->world->addSystem(new Renderer3DSystem($engine->renderer3D, $commandList));
 
     // Camera entity
@@ -66,9 +72,9 @@ $engine->onInit(function () use ($engine): void {
     // Sun light
     $sun = $engine->world->createEntity();
     $sun->attach(new DirectionalLight(
-        direction: new Vec3(-0.4, -1.0, -0.6),
+        direction: new Vec3(-1.0, -0.4, -0.3),
         color:     new Color(1.0, 0.95, 0.85),
-        intensity: 2.5,
+        intensity: 1.2,
     ));
     $sun->attach(new Transform3D());
 

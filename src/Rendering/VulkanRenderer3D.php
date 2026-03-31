@@ -15,6 +15,7 @@ use PHPolygon\Rendering\Command\SetCamera;
 use PHPolygon\Rendering\Command\SetDirectionalLight;
 use PHPolygon\Rendering\Command\SetFog;
 use PHPolygon\Rendering\Command\SetSkybox;
+use PHPolygon\Rendering\Command\SetSkyColors;
 use Vk\Buffer;
 use Vk\CommandPool;
 use Vk\DescriptorPool;
@@ -23,7 +24,6 @@ use Vk\DescriptorSetLayout;
 use Vk\Device;
 use Vk\DeviceMemory;
 use Vk\Fence;
-use Vk\Framebuffer;
 use Vk\Image;
 use Vk\ImageView;
 use Vk\Instance;
@@ -38,7 +38,12 @@ use Vk\Surface;
 use Vk\Swapchain;
 
 /**
- * Vulkan 1.0 3D renderer. Translates a RenderCommandList into Vulkan draw calls.
+ * Vulkan 3D renderer.
+ *
+ * Renders into a private offscreen image (not directly into the swapchain) and
+ * copies the result to the acquired swapchain image before presentation.
+ * This avoids MoltenVK instability when drawing indexed to swapchain images.
+ *
  * Requires a GLFW window created with GLFW_CLIENT_API = GLFW_NO_API.
  */
 class VulkanRenderer3D implements Renderer3DInterface
@@ -55,6 +60,7 @@ class VulkanRenderer3D implements Renderer3DInterface
     private Swapchain $swapchain;
     private int $surfaceFormat;
     private RenderPass $renderPass;
+    private \Vk\Framebuffer $framebuffer;
     private Pipeline $pipeline;
     private PipelineLayout $pipelineLayout;
     private DescriptorSetLayout $descriptorSetLayout;
@@ -66,19 +72,30 @@ class VulkanRenderer3D implements Renderer3DInterface
     private Semaphore $imageAvailableSem;
     private Semaphore $renderFinishedSem;
 
-    /** @var ImageView[] */
-    private array $swapImageViews = [];
-    /** @var Framebuffer[] */
-    private array $framebuffers = [];
-    /** @var array<array<mixed>> GPU memory type descriptors */
+    /** @var array<int, Image> — swapchain images, stored only to prevent PHP GC during rendering */
+    private array $swapImages = [];
+
+    // Offscreen color image: render here, then copyImage → swapchain
+    private Image     $offscreenColor;
+    private DeviceMemory $offscreenColorMem;
+    private ImageView $offscreenColorView;
+
+    // Depth resources — class properties to prevent premature GC
+    private Image     $depthImage;
+    private DeviceMemory $depthMem;
+    private ImageView $depthView;
+
+    // No Framebuffer or RenderPass — using VK_KHR_dynamic_rendering
+
+    /** @var array<array<mixed>> */
     private array $memTypes = [];
 
-    private Buffer $frameUbo;
+    private Buffer    $frameUbo;
     private DeviceMemory $frameUboMem;
-    private Buffer $lightingUbo;
+    private Buffer    $lightingUbo;
     private DeviceMemory $lightingUboMem;
 
-    private int $currentImageIndex = 0;
+    private int   $currentImageIndex = 0;
     private float $clearR = 0.0;
     private float $clearG = 0.0;
     private float $clearB = 0.0;
@@ -87,36 +104,37 @@ class VulkanRenderer3D implements Renderer3DInterface
     private array $viewMatrix = [];
     /** @var float[] */
     private array $projMatrix = [];
-    /** @var float[] [r, g, b, intensity] */
-    private array $ambient = [1.0, 1.0, 1.0, 0.1];
-    /** @var float[] [dx, dy, dz, intensity, r, g, b] */
+    /** @var float[] */
+    private array $ambient  = [1.0, 1.0, 1.0, 0.1];
+    /** @var float[] */
     private array $dirLight = [0.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-    /** @var float[] [r, g, b] */
-    private array $albedo = [0.8, 0.8, 0.8];
-    /** @var float[] [r, g, b, near, far] */
-    private array $fog = [0.5, 0.5, 0.5, 50.0, 200.0];
-    /** @var float[] [x, y, z] */
+    /** @var float[] */
+    private array $albedo   = [0.8, 0.8, 0.8];
+    private float $roughness = 0.5;
+    private float $metallic  = 0.0;
+    /** @var float[] */
+    private array $fog      = [0.5, 0.5, 0.5, 50.0, 200.0];
+    /** @var float[] */
     private array $cameraPos = [0.0, 0.0, 0.0];
     /** @var array<int, array{pos: float[], color: float[], intensity: float, radius: float}> */
     private array $pointLights = [];
 
-    // Mesh GPU buffer cache — holds Buffer + DeviceMemory together to prevent GC
     /** @var array<string, array{vb: Buffer, vbMem: DeviceMemory, ib: Buffer, ibMem: DeviceMemory, count: int}> */
     private array $meshCache = [];
 
-    private const VERT_SPV        = __DIR__ . '/../../resources/shaders/compiled/mesh3d_vk.vert.spv';
-    private const FRAG_SPV        = __DIR__ . '/../../resources/shaders/compiled/mesh3d_vk.frag.spv';
-    private const FRAME_UBO_SIZE   = 128;   // mat4 view + mat4 projection
-    private const LIGHTING_UBO_SIZE = 384;  // 7×16 + 16 + 8×32
+    private const VERT_SPV         = __DIR__ . '/../../resources/shaders/compiled/mesh3d_vk.vert.spv';
+    private const FRAG_SPV         = __DIR__ . '/../../resources/shaders/compiled/mesh3d_vk.frag.spv';
+    private const FRAME_UBO_SIZE   = 128;
+    private const LIGHTING_UBO_SIZE = 384;
 
-    // Vk constants mirrored here — Vk\Vk is final+abstract which PHPStan rejects
-    private const VK_CMD_ONE_TIME_SUBMIT       = 1;
     private const VK_PIPELINE_BIND_GRAPHICS    = 0;
     private const VK_SHADER_STAGE_VERTEX       = 1;
     private const VK_SHADER_STAGE_FRAGMENT     = 16;
     private const VK_INDEX_TYPE_UINT32         = 1;
-    private const VK_IMAGE_USAGE_COLOR         = 16;
-    private const VK_IMAGE_USAGE_DEPTH         = 32;
+    private const VK_IMAGE_USAGE_COLOR         = 16;   // COLOR_ATTACHMENT
+    private const VK_IMAGE_USAGE_DEPTH         = 32;   // DEPTH_STENCIL_ATTACHMENT
+    private const VK_IMAGE_USAGE_TRANSFER_SRC  = 1;
+    private const VK_IMAGE_USAGE_TRANSFER_DST  = 2;
     private const VK_SHARING_EXCLUSIVE         = 0;
     private const VK_SAMPLE_COUNT_1            = 1;
     private const VK_LOAD_OP_CLEAR             = 1;
@@ -127,6 +145,8 @@ class VulkanRenderer3D implements Renderer3DInterface
     private const VK_LAYOUT_PRESENT_SRC        = 1000001002;
     private const VK_LAYOUT_COLOR_ATTACHMENT   = 2;
     private const VK_LAYOUT_DEPTH_ATTACHMENT   = 3;
+    private const VK_LAYOUT_TRANSFER_SRC       = 6;
+    private const VK_LAYOUT_TRANSFER_DST       = 7;
     private const VK_ASPECT_COLOR              = 1;
     private const VK_ASPECT_DEPTH              = 2;
     private const VK_FORMAT_D32_SFLOAT         = 126;
@@ -141,12 +161,33 @@ class VulkanRenderer3D implements Renderer3DInterface
     private const VK_FRONT_FACE_CCW            = 0;
     private const VK_CMD_POOL_RESET_CMD_BUFFER = 2;
     private const VK_PRESENT_MODE_FIFO         = 2;
+    private const VK_CMD_ONE_TIME_SUBMIT        = 1;
+    // Access masks
+    private const VK_ACCESS_NONE               = 0;
+    private const VK_ACCESS_COLOR_WRITE        = 0x100;    // 256
+    private const VK_ACCESS_DEPTH_WRITE        = 0x400;    // 1024
+    private const VK_ACCESS_TRANSFER_READ      = 0x800;    // 2048
+    private const VK_ACCESS_TRANSFER_WRITE     = 0x1000;   // 4096
+    // Pipeline stages
+    private const VK_STAGE_TOP                 = 0x1;      // TOP_OF_PIPE
+    private const VK_STAGE_EARLY_FRAG_TESTS    = 0x100;    // EARLY_FRAGMENT_TESTS
+    private const VK_STAGE_COLOR_OUTPUT        = 0x400;    // COLOR_ATTACHMENT_OUTPUT
+    private const VK_STAGE_TRANSFER            = 0x1000;   // TRANSFER
+    private const VK_STAGE_BOTTOM              = 0x2000;   // BOTTOM_OF_PIPE
 
     public function __construct(int $width, int $height, \GLFWwindow $windowHandle)
     {
         $this->width  = $width;
         $this->height = $height;
         $this->initVulkan($windowHandle);
+    }
+
+    public function __destruct()
+    {
+        // Wait for all in-flight GPU work to finish before PHP destroys Vulkan objects.
+        // Without this, the GPU may still be accessing images/buffers while PHP frees them,
+        // causing a MoltenVK segfault in MVKSwapchain::destroy().
+        $this->queue->waitIdle();
     }
 
     public function beginFrame(): void
@@ -208,6 +249,8 @@ class VulkanRenderer3D implements Renderer3DInterface
         $this->ambient    = [1.0, 1.0, 1.0, 0.1];
         $this->dirLight   = [0.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         $this->albedo     = [0.8, 0.8, 0.8];
+        $this->roughness  = 0.5;
+        $this->metallic   = 0.0;
         $this->fog        = [0.5, 0.5, 0.5, 50.0, 200.0];
         $this->cameraPos  = [0.0, 0.0, 0.0];
 
@@ -244,17 +287,22 @@ class VulkanRenderer3D implements Renderer3DInterface
                     $command->near, $command->far,
                 ];
 
+            } elseif ($command instanceof SetSkyColors) {
+                $this->clearR = $command->skyColor->r;
+                $this->clearG = $command->skyColor->g;
+                $this->clearB = $command->skyColor->b;
             } elseif ($command instanceof SetSkybox) {
-                // Skybox requires a separate pipeline — Phase 8+ TODO
+                // TODO Phase 8+
             }
         }
 
         $this->uploadFrameUbo();
         $this->uploadLightingUbo();
 
+        // ── Render into offscreen image via render pass ──────────────────────
         $this->commandBuffer->beginRenderPass(
             $this->renderPass,
-            $this->framebuffers[$this->currentImageIndex],
+            $this->framebuffer,
             0, 0, $this->width, $this->height,
             [[$this->clearR, $this->clearG, $this->clearB, 1.0], [1.0, 0]],
         );
@@ -280,15 +328,64 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
 
         $this->commandBuffer->endRenderPass();
+
+        // ── Copy offscreen → swapchain ───────────────────────────────────────
+
+        // Offscreen: COLOR_ATTACHMENT_OPTIMAL → TRANSFER_SRC_OPTIMAL
+        $this->commandBuffer->imageMemoryBarrier(
+            $this->offscreenColor,
+            self::VK_LAYOUT_COLOR_ATTACHMENT,
+            self::VK_LAYOUT_TRANSFER_SRC,
+            self::VK_ACCESS_COLOR_WRITE,
+            self::VK_ACCESS_TRANSFER_READ,
+            self::VK_STAGE_COLOR_OUTPUT,
+            self::VK_STAGE_TRANSFER,
+            self::VK_ASPECT_COLOR,
+        );
+
+        // Swapchain image: UNDEFINED → TRANSFER_DST_OPTIMAL
+        $this->commandBuffer->imageMemoryBarrier(
+            $this->swapImages[$this->currentImageIndex],
+            self::VK_LAYOUT_UNDEFINED,
+            self::VK_LAYOUT_TRANSFER_DST,
+            self::VK_ACCESS_NONE,
+            self::VK_ACCESS_TRANSFER_WRITE,
+            self::VK_STAGE_TOP,
+            self::VK_STAGE_TRANSFER,
+            self::VK_ASPECT_COLOR,
+        );
+
+        // Full-image copy
+        $this->commandBuffer->copyImage(
+            $this->offscreenColor, self::VK_LAYOUT_TRANSFER_SRC,
+            $this->swapImages[$this->currentImageIndex], self::VK_LAYOUT_TRANSFER_DST,
+            $this->width, $this->height,
+        );
+
+        // Swapchain image: TRANSFER_DST_OPTIMAL → PRESENT_SRC_KHR
+        $this->commandBuffer->imageMemoryBarrier(
+            $this->swapImages[$this->currentImageIndex],
+            self::VK_LAYOUT_TRANSFER_DST,
+            self::VK_LAYOUT_PRESENT_SRC,
+            self::VK_ACCESS_TRANSFER_WRITE,
+            self::VK_ACCESS_NONE,
+            self::VK_STAGE_TRANSFER,
+            self::VK_STAGE_BOTTOM,
+            self::VK_ASPECT_COLOR,
+        );
     }
 
     private function resolveMaterial(string $materialId): void
     {
         $material = MaterialRegistry::get($materialId);
         if ($material !== null) {
-            $this->albedo = [$material->albedo->r, $material->albedo->g, $material->albedo->b];
+            $this->albedo    = [$material->albedo->r, $material->albedo->g, $material->albedo->b];
+            $this->roughness = $material->roughness;
+            $this->metallic  = $material->metallic;
         } else {
-            $this->albedo = [0.8, 0.8, 0.8];
+            $this->albedo    = [0.8, 0.8, 0.8];
+            $this->roughness = 0.5;
+            $this->metallic  = 0.0;
         }
     }
 
@@ -296,6 +393,7 @@ class VulkanRenderer3D implements Renderer3DInterface
     {
         $meshData = MeshRegistry::get($meshId);
         if ($meshData === null) {
+            error_log("[VkRenderer] drawMeshCommand: mesh '$meshId' not found in registry");
             return;
         }
 
@@ -331,7 +429,7 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
         $vbMem = new DeviceMemory($this->device, $vbSize, $this->findMemory($vbReq, true));
         $vb->bindMemory($vbMem, 0);
-        $vbMem->map(0, null);
+        $vbMem->map(0, $vbSize);
         $vbMem->write($vertexData, 0);
 
         $indexData = '';
@@ -346,7 +444,7 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
         $ibMem = new DeviceMemory($this->device, $ibSize, $this->findMemory($ibReq, true));
         $ib->bindMemory($ibMem, 0);
-        $ibMem->map(0, null);
+        $ibMem->map(0, $ibSize);
         $ibMem->write($indexData, 0);
 
         $this->meshCache[$meshId] = [
@@ -360,10 +458,6 @@ class VulkanRenderer3D implements Renderer3DInterface
 
     private function uploadFrameUbo(): void
     {
-        // Vulkan clip correction (column-major):
-        //   Row 1 negiert  → Y-Achse flippen (OpenGL Y-up → Vulkan Y-down)
-        //   Z-Spalte ×0.5, Offset +0.5 → Z-Bereich [-1,1] → [0,1]
-        // Anwendung links der Projektionsmatrix: correctedProj = clipMatrix * proj
         $vulkanClip = new Mat4([
              1.0,  0.0,  0.0,  0.0,
              0.0, -1.0,  0.0,  0.0,
@@ -373,6 +467,7 @@ class VulkanRenderer3D implements Renderer3DInterface
         $correctedProj = $vulkanClip->multiply(new Mat4($this->projMatrix));
         $data = pack('f16', ...$this->viewMatrix)
               . pack('f16', ...$correctedProj->toArray());
+
         $this->frameUboMem->write($data, 0);
     }
 
@@ -381,9 +476,8 @@ class VulkanRenderer3D implements Renderer3DInterface
         $data  = pack('f4', $this->ambient[0], $this->ambient[1], $this->ambient[2], $this->ambient[3]);
         $data .= pack('f4', $this->dirLight[0], $this->dirLight[1], $this->dirLight[2], $this->dirLight[3]);
         $data .= pack('f4', $this->dirLight[4], $this->dirLight[5], $this->dirLight[6], 0.0);
-        $data .= pack('f4', $this->albedo[0], $this->albedo[1], $this->albedo[2], 0.0);
-        // u_emission.xyz + u_metallic — not yet driven from PHP side, send zeros
-        $data .= pack('f4', 0.0, 0.0, 0.0, 0.0);
+        $data .= pack('f4', $this->albedo[0], $this->albedo[1], $this->albedo[2], $this->roughness);
+        $data .= pack('f4', 0.0, 0.0, 0.0, $this->metallic);
         $data .= pack('f4', $this->fog[0], $this->fog[1], $this->fog[2], $this->fog[3]);
         $data .= pack('f4', $this->cameraPos[0], $this->cameraPos[1], $this->cameraPos[2], $this->fog[4]);
         $plCount = count($this->pointLights);
@@ -419,7 +513,6 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
         $this->gpu = $firstDevice;
 
-        // Cache memory types for later use (avoids repeated mixed-type array access)
         $rawMemProps = $this->gpu->getMemoryProperties();
         $rawTypes    = $rawMemProps['types'] ?? [];
         if (is_array($rawTypes)) {
@@ -433,12 +526,13 @@ class VulkanRenderer3D implements Renderer3DInterface
         $this->device = new Device(
             $this->gpu,
             [['familyIndex' => $this->graphicsFamily, 'count' => 1]],
-            ['VK_KHR_swapchain'],
+            ['VK_KHR_swapchain', 'VK_KHR_dynamic_rendering'],
             null,
         );
         $this->queue = $this->device->getQueue($this->graphicsFamily, 0);
 
         $this->createSwapchain();
+        $this->createOffscreenAndDepthImages();
         $this->createRenderPass();
         $this->createPipeline();
         $this->createUBOs();
@@ -492,13 +586,29 @@ class VulkanRenderer3D implements Renderer3DInterface
             min(3, $maxCount ? (is_int($maxCount) ? $maxCount : (int) $maxCount) : 3),
         );
 
+        // Use the surface's reported currentExtent for swapchain dimensions.
+        // On macOS/MoltenVK, getFramebufferWidth/Height may return Retina pixel counts
+        // while the Vulkan surface operates at a different (often smaller) resolution.
+        $rawExtent   = is_array($caps) ? ($caps['currentExtent'] ?? []) : [];
+        $extentW     = is_array($rawExtent) ? ($rawExtent['width']  ?? $this->width)  : $this->width;
+        $extentH     = is_array($rawExtent) ? ($rawExtent['height'] ?? $this->height) : $this->height;
+        $extentW     = is_int($extentW) ? $extentW : (int) $extentW;
+        $extentH     = is_int($extentH) ? $extentH : (int) $extentH;
+        // Clamp to valid range
+        $minExtW     = is_array($caps) ? (int)($caps['minImageExtent']['width']  ?? 1) : 1;
+        $minExtH     = is_array($caps) ? (int)($caps['minImageExtent']['height'] ?? 1) : 1;
+        $maxExtW     = is_array($caps) ? (int)($caps['maxImageExtent']['width']  ?? $extentW) : $extentW;
+        $maxExtH     = is_array($caps) ? (int)($caps['maxImageExtent']['height'] ?? $extentH) : $extentH;
+        $this->width  = max($minExtW, min($extentW, $maxExtW));
+        $this->height = max($minExtH, min($extentH, $maxExtH));
+
         $this->swapchain = new Swapchain($this->device, $this->surface, [
             'minImageCount'    => $imageCount,
             'imageFormat'      => $this->surfaceFormat,
             'imageColorSpace'  => $colorSpaceInt,
             'imageExtent'      => ['width' => $this->width, 'height' => $this->height],
             'imageArrayLayers' => 1,
-            'imageUsage'       => self::VK_IMAGE_USAGE_COLOR,
+            'imageUsage'       => self::VK_IMAGE_USAGE_COLOR | self::VK_IMAGE_USAGE_TRANSFER_DST,
             'imageSharingMode' => self::VK_SHARING_EXCLUSIVE,
             'preTransform'     => is_int($transform) ? $transform : (int) $transform,
             'compositeAlpha'   => 1,
@@ -514,8 +624,48 @@ class VulkanRenderer3D implements Renderer3DInterface
             if (!$img instanceof Image) {
                 throw new \RuntimeException('Swapchain image is not a Vk\\Image');
             }
-            $this->swapImageViews[] = new ImageView($this->device, $img, $this->surfaceFormat, self::VK_ASPECT_COLOR, 1);
+            $this->swapImages[] = $img;
         }
+    }
+
+    private function createOffscreenAndDepthImages(): void
+    {
+        // Offscreen color: rendered into, then copied to swapchain
+        $this->offscreenColor = new Image(
+            $this->device,
+            $this->width, $this->height,
+            $this->surfaceFormat,
+            self::VK_IMAGE_USAGE_COLOR | self::VK_IMAGE_USAGE_TRANSFER_SRC,
+            0,
+            self::VK_SAMPLE_COUNT_1,
+        );
+        $colorReq  = $this->offscreenColor->getMemoryRequirements();
+        $colorSize = $colorReq['size'];
+        if (!is_int($colorSize)) {
+            throw new \RuntimeException('Invalid offscreen color image memory size');
+        }
+        $this->offscreenColorMem = new DeviceMemory($this->device, $colorSize, $this->findMemory($colorReq, false));
+        $this->offscreenColor->bindMemory($this->offscreenColorMem, 0);
+        $this->offscreenColorView = new ImageView(
+            $this->device, $this->offscreenColor, $this->surfaceFormat, self::VK_ASPECT_COLOR, 1,
+        );
+
+        // Depth image
+        $this->depthImage = new Image(
+            $this->device, $this->width, $this->height,
+            self::VK_FORMAT_D32_SFLOAT, self::VK_IMAGE_USAGE_DEPTH,
+            0, self::VK_SAMPLE_COUNT_1,
+        );
+        $depthReq  = $this->depthImage->getMemoryRequirements();
+        $depthSize = $depthReq['size'];
+        if (!is_int($depthSize)) {
+            throw new \RuntimeException('Invalid depth image memory requirements');
+        }
+        $this->depthMem = new DeviceMemory($this->device, $depthSize, $this->findMemory($depthReq, false));
+        $this->depthImage->bindMemory($this->depthMem, 0);
+        $this->depthView = new ImageView(
+            $this->device, $this->depthImage, self::VK_FORMAT_D32_SFLOAT, self::VK_ASPECT_DEPTH, 1,
+        );
     }
 
     private function createRenderPass(): void
@@ -531,7 +681,7 @@ class VulkanRenderer3D implements Renderer3DInterface
                     'stencilLoadOp'  => self::VK_LOAD_OP_DONT_CARE,
                     'stencilStoreOp' => self::VK_STORE_OP_DONT_CARE,
                     'initialLayout'  => self::VK_LAYOUT_UNDEFINED,
-                    'finalLayout'    => self::VK_LAYOUT_PRESENT_SRC,
+                    'finalLayout'    => self::VK_LAYOUT_COLOR_ATTACHMENT,
                 ],
                 [
                     'format'         => self::VK_FORMAT_D32_SFLOAT,
@@ -554,31 +704,11 @@ class VulkanRenderer3D implements Renderer3DInterface
             [],
         );
 
-        $depthImage = new Image(
-            $this->device,
-            $this->width,
-            $this->height,
-            self::VK_FORMAT_D32_SFLOAT,
-            self::VK_IMAGE_USAGE_DEPTH,
-            0,
-            self::VK_SAMPLE_COUNT_1,
+        $this->framebuffer = new \Vk\Framebuffer(
+            $this->device, $this->renderPass,
+            [$this->offscreenColorView, $this->depthView],
+            $this->width, $this->height, 1,
         );
-        $depthReq  = $depthImage->getMemoryRequirements();
-        $depthSize = $depthReq['size'];
-        if (!is_int($depthSize)) {
-            throw new \RuntimeException('Invalid depth image memory requirements');
-        }
-        $depthMem = new DeviceMemory($this->device, $depthSize, $this->findMemory($depthReq, false));
-        $depthImage->bindMemory($depthMem, 0);
-        $depthView = new ImageView($this->device, $depthImage, self::VK_FORMAT_D32_SFLOAT, self::VK_ASPECT_DEPTH, 1);
-
-        foreach ($this->swapImageViews as $colorView) {
-            $this->framebuffers[] = new Framebuffer(
-                $this->device, $this->renderPass,
-                [$colorView, $depthView],
-                $this->width, $this->height, 1,
-            );
-        }
     }
 
     private function createPipeline(): void
@@ -597,6 +727,9 @@ class VulkanRenderer3D implements Renderer3DInterface
             [['stageFlags' => self::VK_SHADER_STAGE_VERTEX, 'offset' => 0, 'size' => 64]],
         );
 
+        // Pipeline created with renderPass (extension requires it), but actual rendering
+        // uses beginRendering/endRendering (VK_KHR_dynamic_rendering) to avoid MoltenVK
+        // render-pass layout bugs that silently discard draw calls.
         $this->pipeline = Pipeline::createGraphics($this->device, [
             'renderPass'       => $this->renderPass,
             'layout'           => $this->pipelineLayout,
@@ -612,6 +745,8 @@ class VulkanRenderer3D implements Renderer3DInterface
             ],
             'cullMode'         => self::VK_CULL_MODE_BACK,
             'frontFace'        => self::VK_FRONT_FACE_CCW,
+            'depthTest'        => true,
+            'depthWrite'       => true,
         ]);
     }
 
@@ -627,7 +762,7 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
         $this->frameUboMem = new DeviceMemory($this->device, $reqSize, $this->findMemory($req, true));
         $this->frameUbo->bindMemory($this->frameUboMem, 0);
-        $this->frameUboMem->map(0, null);
+        $this->frameUboMem->map(0, $reqSize);
 
         $this->lightingUbo = new Buffer(
             $this->device, self::LIGHTING_UBO_SIZE, self::VK_BUFFER_USAGE_UNIFORM, self::VK_SHARING_EXCLUSIVE,
@@ -639,7 +774,7 @@ class VulkanRenderer3D implements Renderer3DInterface
         }
         $this->lightingUboMem = new DeviceMemory($this->device, $req2Size, $this->findMemory($req2, true));
         $this->lightingUbo->bindMemory($this->lightingUboMem, 0);
-        $this->lightingUboMem->map(0, null);
+        $this->lightingUboMem->map(0, $req2Size);
     }
 
     private function createDescriptors(): void

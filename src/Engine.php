@@ -216,6 +216,9 @@ class Engine
                     }
 
                     $this->renderer2D->endFrame();
+                    if ($this->renderer3D !== null) {
+                        $this->renderer3D->endFrame();
+                    }
                     if (!$nativeBackend) {
                         $this->window->swapBuffers();
                     }
@@ -253,6 +256,9 @@ class Engine
                     }
 
                     $this->renderer2D->endFrame();
+                    if ($this->renderer3D !== null) {
+                        $this->renderer3D->endFrame();
+                    }
                     if (!$nativeBackend) {
                         $this->window->swapBuffers();
                     }

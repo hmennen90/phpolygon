@@ -124,6 +124,12 @@ void main() {
     fogFactor = 1.0 - exp(-fogFactor * fogFactor * 3.0);
     color = mix(color, u_fog_color, fogFactor);
 
+    // ACES filmic tonemapping
+    {
+        const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+        color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3(0.0), vec3(1.0));
+    }
+
     // Gamma correction
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
 
