@@ -5,11 +5,12 @@
     "license": "MIT",
     "require": {
         "php": ">=8.2",
-        "ext-glfw": "*",
-        "ext-vulkan": "*"
+        "ext-glfw": "*"
     },
     "suggest": {
-        "ext-gd": "Required for logo/image generation tools",
+        "ext-vulkan": "Vulkan 3D backend (renderBackend3D: 'vulkan') — install via PIE: pie install hmennen90/php-vulkan",
+        "ext-metal": "Metal 3D backend, macOS only (renderBackend3D: 'metal') — install via PIE: pie install hmennen90/php-metal-gpu:@dev",
+        "ext-gd": "Required for visual regression testing (GdRenderer2D) and logo/image generation",
         "ext-ffi": "Alternative GPU binding mechanism (not used for frame-critical calls)",
         "ext-parallel": "Required for multithreading support (ZTS build)"
     },
