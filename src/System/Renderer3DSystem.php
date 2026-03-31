@@ -53,7 +53,7 @@ class Renderer3DSystem extends AbstractSystem
             $this->commandList->add(new DrawMesh(
                 $mesh->meshId,
                 $mesh->materialId,
-                $transform->getWorldMatrix(),
+                $transform->getLocalMatrix(),
             ));
         }
 
