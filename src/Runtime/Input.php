@@ -86,7 +86,7 @@ class Input implements InputInterface
 
     public function isKeyPressed(int $key): bool
     {
-        return $this->keyPressedThisFrame[$key] ?? false;
+        return (bool)($this->keyPressedThisFrame[$key] ?? false);
     }
 
     public function isKeyReleased(int $key): bool
