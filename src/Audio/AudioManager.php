@@ -120,6 +120,17 @@ class AudioManager
     }
 
     /**
+     * Set volume for a specific active playback (respects channel and master volume).
+     * Use this to adjust looping ambient sounds each frame without restarting them.
+     */
+    public function setPlaybackVolume(int $playbackId, float $volume): void
+    {
+        $channel = $this->playbackChannels[$playbackId] ?? AudioChannel::SFX;
+        $effective = $this->calculateEffectiveVolume($channel, $volume);
+        $this->backend->setVolume($playbackId, $effective);
+    }
+
+    /**
      * Stop a specific playback.
      */
     public function stop(int $playbackId): void
