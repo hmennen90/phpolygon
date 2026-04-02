@@ -219,6 +219,8 @@ function resolveTargets(string $platformArg): array
     }
 
     if ($platformArg === 'all') {
+        // linux-arm64 excluded from 'all' — not a Steam target
+        unset($allTargets['linux-arm64']);
         return $allTargets;
     }
 
