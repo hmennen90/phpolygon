@@ -39,6 +39,14 @@ class UIContext
     /** Tracks the active (pressed) widget ID */
     private string $activeWidget = '';
 
+    /**
+     * True once the left mouse button has been fully released since the last
+     * slider activation. Prevents synthetic GLFW_PRESS events (macOS fullscreen)
+     * from activating sliders — synthetic presses never produce a RELEASE event,
+     * so this guard is never satisfied by them.
+     */
+    private bool $mouseReleasedSinceLastSlider = true;
+
     /** Text input state for the currently focused text field */
     private string $focusedTextField = '';
     private string $textFieldBuffer = '';
@@ -280,16 +288,31 @@ class UIContext
             $this->anyHovered = true;
         }
 
-        if ($hovered && $this->input->isMouseButtonDown(0)) {
-            $this->activeWidget = $id;
+        if ($this->input->isMouseButtonReleased(0)) {
+            $this->mouseReleasedSinceLastSlider = true;
         }
+
+        if ($hovered && $this->input->isMouseButtonPressed(0) && $this->mouseReleasedSinceLastSlider) {
+            $this->activeWidget = $id;
+            $this->mouseReleasedSinceLastSlider = false;
+        }
+
         if ($this->activeWidget === $id) {
-            if ($this->input->isMouseButtonDown(0)) {
-                $mouseX = $this->input->getMouseX();
+            if (!$this->input->isMouseButtonDown(0)) {
+                // Released — deactivate and allow next real press
+                $this->activeWidget = '';
+                $this->mouseReleasedSinceLastSlider = true;
+            } elseif ($hovered) {
+                // Only track value while cursor is over the bar.
+                // If cursor leaves (e.g. phantom stuck press), slider deactivates next branch.
+                $mouseX = $this->input->getMouseX() - $this->viewportOffsetX;
                 $t = max(0.0, min(1.0, ($mouseX - $barX) / $barW));
                 $value = $min + ($max - $min) * $t;
             } else {
+                // Button held but cursor left bar — treat as phantom/accidental,
+                // deactivate without allowing re-activation until real release arrives.
                 $this->activeWidget = '';
+                $this->mouseReleasedSinceLastSlider = false;
             }
         }
 
