@@ -106,9 +106,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glDepthFunc(GL_LESS);
         glEnable(GL_MULTISAMPLE);
         glDisable(GL_CULL_FACE);
-        // Y-flip reverses clip-space winding (CCW→CW); declare CW = front-facing
-        // so gl_FrontFacing stays correct in the fragment shader.
-        glFrontFace(GL_CW);
+        glFrontFace(GL_CCW);
         $this->pointLightCount = 0;
         $this->pointLights     = [];
     }
@@ -138,9 +136,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glDepthFunc(GL_LESS);
         glEnable(GL_MULTISAMPLE);
         glDisable(GL_CULL_FACE);
-        // Y-flip reverses clip-space winding (CCW→CW); declare CW = front-facing
-        // so gl_FrontFacing stays correct in the fragment shader.
-        glFrontFace(GL_CW);
+        glFrontFace(GL_CCW);
         glClear(GL_DEPTH_BUFFER_BIT);
         $this->pointLightCount = 0;
         $this->pointLights     = [];
@@ -196,8 +192,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
         foreach ($commandList->getCommands() as $command) {
             if ($command instanceof SetCamera) {
                 $this->currentViewMatrix = $command->viewMatrix;
-                // macOS OpenGL rasterizes Y inverted — negate Y in clip space to correct
-                $this->currentProjectionMatrix = Mat4::scaling(1.0, -1.0, 1.0)->multiply($command->projectionMatrix);
+                $this->currentProjectionMatrix = $command->projectionMatrix;
                 $this->setUniformMat4('u_view', $command->viewMatrix);
                 $this->setUniformMat4('u_projection', $this->currentProjectionMatrix);
 
