@@ -372,12 +372,11 @@ class UIContext
         }
 
         $focused = $this->focusedTextField === $id;
-
         // Click to focus
         if ($hovered && $this->input->isMouseButtonReleased(0)) {
             $this->focusedTextField = $id;
             $this->textFieldBuffer = $value;
-            $this->textFieldCursor = mb_strlen($value);
+            $this->textFieldCursor = mb_strlen($value) + 1;
             $focused = true;
         } elseif (!$hovered && $this->input->isMouseButtonReleased(0) && $focused) {
             // Click outside → unfocus
@@ -387,18 +386,17 @@ class UIContext
 
         // Process typed characters
         if ($focused) {
+            $chars = $this->input->getCharsTyped();
             foreach ($this->input->getCharsTyped() as $char) {
-                $this->textFieldBuffer = mb_substr($this->textFieldBuffer, 0, $this->textFieldCursor)
-                    . $char
-                    . mb_substr($this->textFieldBuffer, $this->textFieldCursor);
+                $this->textFieldBuffer .= array_pop($chars);
                 $this->textFieldCursor++;
             }
-
             // Backspace (GLFW_KEY_BACKSPACE = 259)
-            if ($this->input->isKeyPressed(259) && $this->textFieldCursor > 0) {
+            if ($this->input->isKeyDown(259) && $this->input->isKeyReleased(259) && $this->textFieldCursor > 0 && !$this->input->isSuppressed()) {
                 $this->textFieldBuffer = mb_substr($this->textFieldBuffer, 0, $this->textFieldCursor - 1)
                     . mb_substr($this->textFieldBuffer, $this->textFieldCursor);
                 $this->textFieldCursor--;
+                $this->input->suppress(1, 0.1);
             }
 
             // Delete (GLFW_KEY_DELETE = 261)
@@ -422,7 +420,6 @@ class UIContext
         $borderCol = $focused ? $s->accentColor : $s->borderColor;
         $this->renderer->drawRoundedRect($fieldX, $fieldY, $fieldW, $fieldH, $s->borderRadius, $s->backgroundColor);
         $this->renderer->drawRectOutline($fieldX, $fieldY, $fieldW, $fieldH, $borderCol, $focused ? 2.0 : $s->borderWidth);
-
         // Draw text content
         $this->renderer->drawText(
             $value,

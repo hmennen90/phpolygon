@@ -97,7 +97,12 @@ class Input implements InputInterface
 
     public function isKeyReleased(int $key): bool
     {
-        return !(bool)($this->keysDown[$key] ?? false) && (bool)($this->keysPrev[$key] ?? false);
+        if($key === 259) {
+            return
+                array_key_exists($key, $this->keysPrev) && $this->keysPrev[$key];
+        }
+        return !array_key_exists($key, $this->keysDown)
+            && array_key_exists($key, $this->keysPrev) && $this->keysPrev[$key];
     }
 
     public function isMouseButtonDown(int $button): bool
