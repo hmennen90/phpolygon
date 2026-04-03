@@ -9,14 +9,22 @@ class SaveSlot
     public function __construct(
         public readonly int $index,
         public readonly string $name,
-        public readonly \DateTimeImmutable $createdAt,
-        public readonly \DateTimeImmutable $updatedAt,
+        public ?\DateTimeImmutable $createdAt,
+        public ?\DateTimeImmutable $updatedAt,
         public readonly float $playTime,
         /** @var array<string, mixed> */
         public readonly array $metadata,
         /** @var array<string, mixed> */
         public readonly array $data,
-    ) {}
+    ) {
+        if ($this->createdAt === null) {
+            $this->createdAt = new \DateTimeImmutable();
+        }
+
+        if($this->updatedAt === null) {
+            $this->updatedAt = new \DateTimeImmutable();
+        }
+    }
 
     /**
      * @return array<string, mixed>
@@ -26,8 +34,8 @@ class SaveSlot
         return [
             'index' => $this->index,
             'name' => $this->name,
-            'createdAt' => $this->createdAt->format('c'),
-            'updatedAt' => $this->updatedAt->format('c'),
+            'createdAt' => $this->createdAt?->format('c') ?? (new \DateTimeImmutable())->format('c'),
+            'updatedAt' => $this->updatedAt?->format('c') ?? (new \DateTimeImmutable())->format('c'),
             'playTime' => $this->playTime,
             'metadata' => $this->metadata,
             'data' => $this->data,
@@ -53,5 +61,16 @@ class SaveSlot
             metadata: $metadata,
             data: $data,
         );
+    }
+
+    public static function createEmpty(int $slotIndex = 0): self
+    {
+        return new self(index: $slotIndex,
+            name: "",
+            createdAt: null,
+            updatedAt: null,
+            playTime: 0,
+            metadata: [],
+            data: [],);
     }
 }

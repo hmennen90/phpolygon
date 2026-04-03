@@ -12,8 +12,8 @@ class SaveSlotInfo
     public function __construct(
         public readonly int $index,
         public readonly string $name,
-        public readonly \DateTimeImmutable $createdAt,
-        public readonly \DateTimeImmutable $updatedAt,
+        public readonly ?\DateTimeImmutable $createdAt,
+        public readonly ?\DateTimeImmutable $updatedAt,
         public readonly float $playTime,
         /** @var array<string, mixed> */
         public readonly array $metadata,

@@ -75,11 +75,11 @@ class SaveManager
 
         $content = file_get_contents($path);
         if ($content === false) {
-            return null;
+            return SaveSlot::createEmpty($slotIndex);
         }
         $decoded = json_decode($content, true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($decoded)) {
-            return null;
+            return SaveSlot::createEmpty($slotIndex);
         }
         /** @var array<string, mixed> $raw */
         $raw = $decoded;
@@ -121,7 +121,7 @@ class SaveManager
 
         for ($i = 0; $i < $this->maxSlots; $i++) {
             $slot = $this->load($i);
-            if ($slot !== null) {
+            if ($slot !== null && !empty($slot->metadata)) {
                 $result[] = new SaveSlotInfo(
                     index: $slot->index,
                     name: $slot->name,
