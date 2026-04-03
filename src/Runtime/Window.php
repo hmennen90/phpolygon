@@ -26,7 +26,7 @@ class Window
      * (fired at the end of the fullscreen animation) does not terminate the loop.
      */
     private float $suppressCloseUntil = 0.0;
-    private const float SUPPRESS_CLOSE_SECS = 2.0;
+    private const SUPPRESS_CLOSE_SECS = 2.0;
 
     /** Stored windowed position/size for restoring after fullscreen or borderless */
     private int $windowedX = 0;
