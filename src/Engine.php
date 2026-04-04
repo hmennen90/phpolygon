@@ -178,6 +178,18 @@ class Engine
                 $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
                 $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
                 $this->renderer2D->setFont('regular');
+
+                // CJK fallback fonts for Japanese, Korean, Chinese
+                $cjkDir = $fontDir . '/noto-sans-cjk';
+                if (is_dir($cjkDir)) {
+                    $vg = $this->renderer2D->getVGContext();
+                    $this->renderer2D->loadFont('noto-sans-sc', $cjkDir . '/NotoSansSC-Regular.otf');
+                    $this->renderer2D->loadFont('noto-sans-kr', $cjkDir . '/NotoSansKR-Regular.otf');
+                    $vg->addFallbackFont('regular', 'noto-sans-sc');
+                    $vg->addFallbackFont('regular', 'noto-sans-kr');
+                    $vg->addFallbackFont('semibold', 'noto-sans-sc');
+                    $vg->addFallbackFont('semibold', 'noto-sans-kr');
+                }
             }
         } elseif (!$this->headless && $nativeBackend) {
             $this->renderer2D = new NullRenderer2D($this->config->width, $this->config->height);
