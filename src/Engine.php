@@ -172,9 +172,11 @@ class Engine
         if (!$this->headless && !$nativeBackend) {
             $this->renderer2D = new Renderer2D($this->window);
 
-            // Auto-load bundled fonts so text renders without manual setup
-            $fontDir = __DIR__ . '/../resources/fonts';
-            if (is_dir($fontDir)) {
+            // Auto-load bundled fonts so text renders without manual setup.
+            // NanoVG (C library) cannot read phar:// paths, so when running
+            // inside a PHAR we extract engine fonts to the filesystem first.
+            $fontDir = $this->resolveEngineFontDir();
+            if ($fontDir !== null && is_dir($fontDir)) {
                 $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
                 $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
                 $this->renderer2D->setFont('regular');
@@ -316,6 +318,54 @@ class Engine
     public function getConfig(): EngineConfig
     {
         return $this->config;
+    }
+
+    /**
+     * Resolve the engine font directory. When running inside a PHAR,
+     * fonts are extracted to the filesystem because NanoVG (C library)
+     * cannot read phar:// stream paths.
+     */
+    private function resolveEngineFontDir(): ?string
+    {
+        $pharDir = __DIR__ . '/../resources/fonts';
+
+        // Development mode: fonts are directly on the filesystem
+        if (!str_starts_with($pharDir, 'phar://')) {
+            return is_dir($pharDir) ? $pharDir : null;
+        }
+
+        // PHAR mode: extract fonts to the resource directory on disk
+        if (!defined('PHPOLYGON_PATH_RESOURCES')) {
+            return null;
+        }
+
+        /** @var string $resourcesDir */
+        $resourcesDir = PHPOLYGON_PATH_RESOURCES;
+
+        $targetDir = $resourcesDir .  '/fonts';
+
+        // Extract engine fonts if not already present
+        if (!is_dir($targetDir . '/noto-sans-cjk') && is_dir($pharDir)) {
+            @mkdir($targetDir, 0755, true);
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($pharDir, \FilesystemIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            );
+            $pharDirLen = strlen($pharDir);
+            /** @var \SplFileInfo $item */
+            foreach ($iterator as $item) {
+                $relPath = substr($item->getPathname(), $pharDirLen + 1);
+                $targetPath = $targetDir . '/' . $relPath;
+                if ($item->isDir()) {
+                    @mkdir($targetPath, 0755, true);
+                } elseif (!file_exists($targetPath)) {
+                    @mkdir(dirname($targetPath), 0755, true);
+                    copy($item->getPathname(), $targetPath);
+                }
+            }
+        }
+
+        return is_dir($targetDir) ? $targetDir : null;
     }
 
     private function shutdown(): void
