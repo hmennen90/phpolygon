@@ -30,6 +30,7 @@ use PHPolygon\Runtime\Window;
 use PHPolygon\SaveGame\SaveManager;
 use PHPolygon\Scene\SceneManager;
 use PHPolygon\Scene\SceneManagerInterface;
+use PHPolygon\Support\Facades\Facade;
 use PHPolygon\Thread\NullThreadScheduler;
 use PHPolygon\Thread\ThreadScheduler;
 use PHPolygon\Thread\ThreadSchedulerFactory;
@@ -114,6 +115,8 @@ class Engine
                 $noApi,
             );
         }
+
+        Facade::setEngine($this);
     }
 
     public function onUpdate(callable $callback): self
@@ -375,5 +378,6 @@ class Engine
         $this->textures->clear();
         $this->world->clear();
         $this->window->destroy();
+        Facade::clearEngine();
     }
 }
