@@ -55,6 +55,9 @@ class UIContext
     /** ID of the currently open dropdown (empty = none open) */
     private string $openDropdown = '';
 
+    /** @var array<string, int> Scroll offset per dropdown ID */
+    private array $dropdownScrollOffset = [];
+
     /** Whether any widget was hovered this frame */
     private bool $anyHovered = false;
 
@@ -446,7 +449,7 @@ class UIContext
      * @param list<string> $options
      * @param float        $width   Override width (0 = regionWidth)
      */
-    public function dropdown(string $id, array $options, int $selectedIndex, float $width = 0.0): int
+    public function dropdown(string $id, array $options, int $selectedIndex, float $width = 0.0, int $maxVisibleItems = 0): int
     {
         $s = $this->style;
         $h = $s->fontSize + $s->padding * 2;
@@ -461,6 +464,10 @@ class UIContext
             if ($this->input->isMouseButtonReleased(0)) {
                 $this->openDropdown = $isOpen ? '' : $id;
                 $isOpen = !$isOpen;
+                if ($isOpen) {
+                    // Reset scroll to show selected item
+                    $this->dropdownScrollOffset[$id] = max(0, $selectedIndex - (int)(($maxVisibleItems > 0 ? $maxVisibleItems : count($options)) / 2));
+                }
             }
         }
 
@@ -478,8 +485,16 @@ class UIContext
         // Draw the open option list (overlay — does not affect layout cursor)
         if ($isOpen && count($options) > 0) {
             $rowH = $h;
+            $totalCount = count($options);
+            $visibleCount = ($maxVisibleItems > 0 && $maxVisibleItems < $totalCount) ? $maxVisibleItems : $totalCount;
+            $scrollable = $visibleCount < $totalCount;
+
+            $scrollOffset = $this->dropdownScrollOffset[$id] ?? 0;
+            $maxOffset = $totalCount - $visibleCount;
+            $scrollOffset = max(0, min($scrollOffset, $maxOffset));
+
             $listY = $fieldRect->y + $h + 2.0;
-            $listH = $rowH * count($options);
+            $listH = $rowH * $visibleCount;
             $listRect = new Rect($fieldRect->x, $listY, $w, $listH);
 
             $listHovered = $this->isHovered($listRect);
@@ -487,11 +502,24 @@ class UIContext
                 $this->anyHovered = true;
             }
 
+            // Mouse wheel scrolling — accept on button or list area
+            if ($scrollable && ($hovered || $listHovered)) {
+                $scrollY = $this->input->getScrollY();
+                if (abs($scrollY) > 0.001) {
+                    $scrollOffset -= ($scrollY > 0.0) ? 1 : -1;
+                    $scrollOffset = max(0, min($scrollOffset, $maxOffset));
+                    $this->dropdownScrollOffset[$id] = $scrollOffset;
+                }
+            }
+
             $this->renderer->drawRoundedRect($listRect->x, $listRect->y, $w, $listH, $s->borderRadius, $s->backgroundColor);
             $this->renderer->drawRectOutline($listRect->x, $listRect->y, $w, $listH, $s->borderColor, $s->borderWidth);
 
-            foreach ($options as $i => $opt) {
-                $optRect = new Rect($fieldRect->x, $listY + $i * $rowH, $w, $rowH);
+            for ($vi = 0; $vi < $visibleCount; $vi++) {
+                $i = $vi + $scrollOffset;
+                if ($i >= $totalCount) break;
+                $opt = $options[$i];
+                $optRect = new Rect($fieldRect->x, $listY + $vi * $rowH, $w, $rowH);
                 $optHovered = $this->isHovered($optRect);
 
                 if ($optHovered) {
@@ -507,6 +535,15 @@ class UIContext
                 }
 
                 $this->renderer->drawText($opt, $optRect->x + $s->padding, $optRect->y + $s->padding, $s->fontSize, $s->textColor);
+            }
+
+            // Scrollbar indicator
+            if ($scrollable) {
+                $scrollbarW = 4.0;
+                $scrollbarX = $fieldRect->x + $w - $scrollbarW - 2.0;
+                $thumbH = max(20.0, $listH * ($visibleCount / (float)$totalCount));
+                $thumbY = $listY + ($listH - $thumbH) * ($scrollOffset / (float)$maxOffset);
+                $this->renderer->drawRoundedRect($scrollbarX, $thumbY, $scrollbarW, $thumbH, 2.0, $s->textColor->withAlpha(0.3));
             }
 
             // Click outside closes without changing selection
