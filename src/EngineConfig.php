@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PHPolygon;
 
+use PHPolygon\Runtime\InputInterface;
 use PHPolygon\Thread\ThreadingMode;
 
 class EngineConfig
@@ -24,5 +25,6 @@ class EngineConfig
         public readonly bool $is3D = false,
         public readonly string $renderBackend3D = 'opengl',
         public readonly ?ThreadingMode $threadingMode = null,
+        public readonly ?InputInterface $input = null,
     ) {}
 }

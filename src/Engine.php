@@ -74,7 +74,7 @@ class Engine
     ) {
         $this->headless = $config->headless;
         $this->world = new World();
-        $this->input = new Input();
+        $this->input = $config->input ?? new Input();
         $this->events = new EventDispatcher();
         $this->clock = new Clock();
         $this->camera2D = new Camera2D($config->width, $config->height);
@@ -373,6 +373,47 @@ class Engine
         }
 
         return is_dir($targetDir) ? $targetDir : null;
+    }
+
+    /**
+     * Render a single test frame with an optional input modifier callback.
+     * Designed for VRT and interaction tests — handles beginFrame/endFrame/input lifecycle.
+     *
+     * @param callable      $draw          fn(Engine): void — draw the frame
+     * @param callable|null $inputModifier fn(InputInterface): void — inject input events before rendering
+     */
+    public function renderTestFrame(callable $draw, ?callable $inputModifier = null): void
+    {
+        if ($inputModifier !== null) {
+            $inputModifier($this->input);
+        }
+
+        $this->renderer2D->beginFrame();
+        $draw($this);
+        $this->renderer2D->endFrame();
+
+        $this->input->endFrame();
+    }
+
+    /**
+     * Render multiple test frames in sequence with per-frame input control.
+     * Each frame: apply input → render → advance input state.
+     *
+     * @param int      $count         Number of frames to render
+     * @param callable $draw          fn(Engine, int $frameIndex): void
+     * @param callable $inputModifier fn(InputInterface, int $frameIndex): void
+     */
+    public function renderTestFrames(int $count, callable $draw, callable $inputModifier): void
+    {
+        for ($i = 0; $i < $count; $i++) {
+            $inputModifier($this->input, $i);
+
+            $this->renderer2D->beginFrame();
+            $draw($this, $i);
+            $this->renderer2D->endFrame();
+
+            $this->input->endFrame();
+        }
     }
 
     private function shutdown(): void

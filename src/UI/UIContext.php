@@ -652,6 +652,14 @@ class UIContext
     }
 
     /**
+     * Check if any text field currently has input focus.
+     */
+    public function hasTextFieldFocus(): bool
+    {
+        return $this->focusedTextField !== '';
+    }
+
+    /**
      * Get the current cursor Y position (useful for custom layouts).
      */
     public function getCursorY(): float
