@@ -111,6 +111,7 @@ class OpenGLRenderer3D implements Renderer3DInterface
             'unlit'   => ['unlit.vert.glsl', 'unlit.frag.glsl'],
             'normals' => ['normals.vert.glsl', 'normals.frag.glsl'],
             'depth'   => ['depth.vert.glsl', 'depth.frag.glsl'],
+            'shadow'  => ['shadow.vert.glsl', 'shadow.frag.glsl'],
             'skybox'  => ['skybox.vert.glsl', 'skybox.frag.glsl'],
         ];
         $shaderDir = __DIR__ . '/../../resources/shaders/source/';
@@ -1060,22 +1061,15 @@ class OpenGLRenderer3D implements Renderer3DInterface
         glBindTexture(GL_TEXTURE_2D, $this->dummyCloudTex);
         glActiveTexture(GL_TEXTURE0);
 
-        // Shadow pass: render depth only
+        // Shadow pass: render depth only using minimal shadow shader
         $shadowMap->beginShadowPass();
-        $this->useShaderProgram($this->shaderProgramCache['default']);
+        $shadowProgram = $this->resolveShaderProgram('shadow');
+        $this->useShaderProgram($shadowProgram);
 
         // Set light-space matrix as view+projection for shadow pass
         $lsm = $shadowMap->getLightSpaceMatrix();
         $this->setUniformMat4('u_view', $lsm);
         $this->setUniformMat4('u_projection', \PHPolygon\Math\Mat4::identity());
-
-        // Disable all fancy rendering for depth pass
-        $this->setUniformInt('u_proc_mode', 0);
-        $this->setUniformFloat('u_alpha', 1.0);
-        $this->setUniformInt('u_vertex_anim', 0);
-        $this->setUniformInt('u_dir_light_count', 0);
-        $this->setUniformInt('u_has_shadow_map', 0);
-        $this->setUniformInt('u_has_cloud_shadow', 0);
 
         // Draw only opaque geometry
         foreach ($commandList->getCommands() as $command) {
@@ -1114,13 +1108,16 @@ class OpenGLRenderer3D implements Renderer3DInterface
         $cloudShadow = $this->cloudShadow;
 
         $cloudShadow->beginPass();
-        $this->useShaderProgram($this->shaderProgramCache['default']);
+        $unlitProgram = $this->resolveShaderProgram('unlit');
+        $this->useShaderProgram($unlitProgram);
 
         // Same light-space view as geometry shadows
         $this->setUniformMat4('u_view', $lsm);
         $this->setUniformMat4('u_projection', \PHPolygon\Math\Mat4::identity());
-        $this->setUniformInt('u_proc_mode', 0);
-        $this->setUniformInt('u_vertex_anim', 0);
+        // Disable fog for cloud shadow pass (unlit shader needs valid fog range)
+        $this->setUniformFloat('u_fog_near', 9999.0);
+        $this->setUniformFloat('u_fog_far', 10000.0);
+        $this->setUniformVec3('u_camera_pos', [0.0, 0.0, 0.0]);
 
         // Render ONLY clouds — their alpha determines shadow opacity
         $hasCloudGeometry = false;
@@ -1153,6 +1150,10 @@ class OpenGLRenderer3D implements Renderer3DInterface
         }
 
         $cloudShadow->endPass();
+
+        // Drain any GL errors from shadow/cloud passes before the main pass
+        // so they don't accumulate and get blamed on the first drawMeshCommand.
+        while (glGetError() !== 0) {}
 
         // Bind both shadow maps for main pass
         $this->useShaderProgram($this->shaderProgramCache['default']);
