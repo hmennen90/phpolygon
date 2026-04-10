@@ -8,6 +8,7 @@ parameters:
         - stubs/vulkan.stub.php
         - stubs/metal.stub.php
         - stubs/glfw.stub.php
+        - stubs/vio.stub.php
     ignoreErrors:
         -
             identifier: trait.unused

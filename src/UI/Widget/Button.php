@@ -41,7 +41,7 @@ class Button extends Widget
 
         $bg = !$this->enabled ? $style->disabledColor
             : ($this->pressed ? $style->activeColor
-                : ($this->hovered ? $style->hoverColor : $style->backgroundColor));
+                : ($this->hovered ? $style->backgroundColor : $style->hoverColor));
 
         $renderer->drawRoundedRect($b->x, $b->y, $b->width, $b->height, $style->borderRadius, $bg);
 

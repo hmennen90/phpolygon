@@ -64,6 +64,7 @@ class UISystemTest extends TestCase
             public function drawRect(float $x, float $y, float $w, float $h, \PHPolygon\Rendering\Color $color): void {}
             public function drawRectOutline(float $x, float $y, float $w, float $h, \PHPolygon\Rendering\Color $color, float $lineWidth = 1.0): void {}
             public function drawRoundedRect(float $x, float $y, float $w, float $h, float $radius, \PHPolygon\Rendering\Color $color): void {}
+            public function drawRoundedRectOutline(float $x, float $y, float $w, float $h, float $radius, \PHPolygon\Rendering\Color $color, float $lineWidth = 1.0): void {}
             public function drawCircle(float $cx, float $cy, float $r, \PHPolygon\Rendering\Color $color): void {}
             public function drawCircleOutline(float $cx, float $cy, float $r, \PHPolygon\Rendering\Color $color, float $lineWidth = 1.0): void {}
             public function drawLine(\PHPolygon\Math\Vec2 $from, \PHPolygon\Math\Vec2 $to, \PHPolygon\Rendering\Color $color, float $width = 1.0): void {}

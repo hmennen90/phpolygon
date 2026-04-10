@@ -94,7 +94,7 @@ class MetalRenderer3D implements Renderer3DInterface
     /** @var array<string, array{vb: Buffer, ib: Buffer, count: int}> */
     private array $meshCache = [];
 
-    public function __construct(int $width, int $height, \GLFWwindow $windowHandle)
+    public function __construct(int $width, int $height, object $windowHandle)
     {
         $this->width  = $width;
         $this->height = $height;
@@ -348,7 +348,7 @@ class MetalRenderer3D implements Renderer3DInterface
         $this->lightingUbo->writeRawContents($data, 0);
     }
 
-    private function initMetal(\GLFWwindow $windowHandle): void
+    private function initMetal(object $windowHandle): void
     {
         $this->device       = \Metal\createSystemDefaultDevice();
         $this->commandQueue = $this->device->createCommandQueue();

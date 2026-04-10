@@ -206,7 +206,7 @@ class UIContext
             $textColor = $s->disabledTextColor;
         } else {
             $bg = $pressing ? $s->activeColor
-                : ($hovered ? $s->hoverColor : $s->backgroundColor);
+                : ($hovered ? $s->backgroundColor : $s->hoverColor);
             $textColor = $s->textColor;
         }
 
@@ -472,7 +472,7 @@ class UIContext
         }
 
         // Draw the closed button
-        $bg = ($hovered || $isOpen) ? $s->hoverColor : $s->backgroundColor;
+        $bg = ($hovered || $isOpen) ? $s->backgroundColor : $s->hoverColor;
         $this->renderer->drawRoundedRect($fieldRect->x, $fieldRect->y, $w, $h, $s->borderRadius, $bg);
         $this->renderer->drawRectOutline($fieldRect->x, $fieldRect->y, $w, $h, $s->borderColor, $s->borderWidth);
 

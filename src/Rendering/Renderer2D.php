@@ -86,6 +86,15 @@ class Renderer2D implements Renderer2DInterface
         $this->vg->fill();
     }
 
+    public function drawRoundedRectOutline(float $x, float $y, float $w, float $h, float $radius, Color $color, float $lineWidth = 1.0): void
+    {
+        $this->vg->beginPath();
+        $this->vg->roundedRect($x, $y, $w, $h, $radius);
+        $this->vg->strokeColor($this->toVGColor($color));
+        $this->vg->strokeWidth($lineWidth);
+        $this->vg->stroke();
+    }
+
     public function drawCircle(float $cx, float $cy, float $r, Color $color): void
     {
         $this->vg->beginPath();

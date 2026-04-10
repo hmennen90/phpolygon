@@ -26,5 +26,6 @@ class EngineConfig
         public readonly string $renderBackend3D = 'opengl',
         public readonly ?ThreadingMode $threadingMode = null,
         public readonly ?InputInterface $input = null,
+        public readonly string $meshCachePath = '',
     ) {}
 }

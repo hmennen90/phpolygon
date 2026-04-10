@@ -38,9 +38,9 @@ class Window
     private ?Input $input = null;
 
     public function __construct(
-        private int $width,
-        private int $height,
-        private string $title,
+        protected int $width,
+        protected int $height,
+        protected string $title,
         private bool $vsync = true,
         private bool $resizable = true,
         private bool $noApi = false, // true for Vulkan/Metal — disables OpenGL context creation
@@ -176,7 +176,6 @@ class Window
         return $this->framebufferWidth / $this->width;
     }
 
-    /** @return \GLFWwindow */
     public function getHandle(): object
     {
         return $this->handle;

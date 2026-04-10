@@ -16,6 +16,8 @@ interface Renderer2DInterface extends RenderContextInterface
 
     public function drawRoundedRect(float $x, float $y, float $w, float $h, float $radius, Color $color): void;
 
+    public function drawRoundedRectOutline(float $x, float $y, float $w, float $h, float $radius, Color $color, float $lineWidth = 1.0): void;
+
     public function drawCircle(float $cx, float $cy, float $r, Color $color): void;
 
     public function drawCircleOutline(float $cx, float $cy, float $r, Color $color, float $lineWidth = 1.0): void;

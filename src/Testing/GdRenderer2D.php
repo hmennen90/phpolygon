@@ -167,6 +167,32 @@ class GdRenderer2D implements Renderer2DInterface
         imagefilledarc($this->image, $ix + $iw - $ir - 1, $iy + $ih - $ir - 1, $d, $d, 0, 90, $gdColor, IMG_ARC_PIE);
     }
 
+    public function drawRoundedRectOutline(float $x, float $y, float $w, float $h, float $radius, Color $color, float $lineWidth = 1.0): void
+    {
+        [$tx, $ty] = $this->transformPoint($x, $y);
+        $gdColor = $this->allocateColor($color);
+        $ix = (int) round($tx);
+        $iy = (int) round($ty);
+        $iw = (int) round($w);
+        $ih = (int) round($h);
+        $ir = (int) round(min($radius, $iw / 2, $ih / 2));
+        $d = $ir * 2;
+        $lw = max(1, (int) round($lineWidth));
+
+        imagesetthickness($this->image, $lw);
+        // Straight edges
+        imageline($this->image, $ix + $ir, $iy, $ix + $iw - $ir - 1, $iy, $gdColor);
+        imageline($this->image, $ix + $ir, $iy + $ih - 1, $ix + $iw - $ir - 1, $iy + $ih - 1, $gdColor);
+        imageline($this->image, $ix, $iy + $ir, $ix, $iy + $ih - $ir - 1, $gdColor);
+        imageline($this->image, $ix + $iw - 1, $iy + $ir, $ix + $iw - 1, $iy + $ih - $ir - 1, $gdColor);
+        // Corner arcs
+        imagearc($this->image, $ix + $ir, $iy + $ir, $d, $d, 180, 270, $gdColor);
+        imagearc($this->image, $ix + $iw - $ir - 1, $iy + $ir, $d, $d, 270, 360, $gdColor);
+        imagearc($this->image, $ix + $ir, $iy + $ih - $ir - 1, $d, $d, 90, 180, $gdColor);
+        imagearc($this->image, $ix + $iw - $ir - 1, $iy + $ih - $ir - 1, $d, $d, 0, 90, $gdColor);
+        imagesetthickness($this->image, 1);
+    }
+
     public function drawCircle(float $cx, float $cy, float $r, Color $color): void
     {
         [$tx, $ty] = $this->transformPoint($cx, $cy);

@@ -6,8 +6,10 @@ namespace PHPolygon;
 
 use PHPolygon\Audio\AudioManager;
 use PHPolygon\Audio\GLFWAudioBackend;
+use PHPolygon\Audio\VioAudioBackend;
 use PHPolygon\ECS\World;
 use PHPolygon\Event\EventDispatcher;
+use PHPolygon\Geometry\MeshCache;
 use PHPolygon\Locale\LocaleManager;
 use PHPolygon\Rendering\Camera2D;
 use PHPolygon\Rendering\NullRenderer2D;
@@ -15,6 +17,9 @@ use PHPolygon\Rendering\MetalRenderer3D;
 use PHPolygon\Rendering\NullRenderer3D;
 use PHPolygon\Rendering\OpenGLRenderer3D;
 use PHPolygon\Rendering\VulkanRenderer3D;
+use PHPolygon\Rendering\VioRenderer2D;
+use PHPolygon\Rendering\VioRenderer3D;
+use PHPolygon\Rendering\VioTextureManager;
 use PHPolygon\Rendering\Renderer2D;
 use PHPolygon\Rendering\Renderer2DInterface;
 use PHPolygon\Rendering\RenderCommandList;
@@ -27,6 +32,8 @@ use PHPolygon\Runtime\GameLoop;
 use PHPolygon\Runtime\Input;
 use PHPolygon\Runtime\InputInterface;
 use PHPolygon\Runtime\NullWindow;
+use PHPolygon\Runtime\VioInput;
+use PHPolygon\Runtime\VioWindow;
 use PHPolygon\Runtime\Window;
 use PHPolygon\SaveGame\SaveManager;
 use PHPolygon\Scene\SceneManager;
@@ -42,7 +49,7 @@ class Engine
     public readonly Window $window;
     public readonly InputInterface $input;
     public readonly Camera2D $camera2D;
-    public readonly TextureManager $textures;
+    public TextureManager $textures;
     public readonly EventDispatcher $events;
     public readonly GameLoop $gameLoop;
     public readonly Clock $clock;
@@ -59,6 +66,7 @@ class Engine
 
     private bool $running = false;
     private bool $headless;
+    private bool $useVio;
 
     /** @var callable|null */
     private $onUpdate = null;
@@ -73,26 +81,39 @@ class Engine
         private readonly EngineConfig $config = new EngineConfig(),
     ) {
         $this->headless = $config->headless;
+        $this->useVio = !$config->headless && extension_loaded('vio');
         $this->world = new World();
-        $this->input = $config->input ?? new Input();
+        $this->input = $config->input ?? ($this->useVio ? new VioInput() : new Input());
         $this->events = new EventDispatcher();
         $this->clock = new Clock();
         $this->camera2D = new Camera2D($config->width, $config->height);
-        $this->textures = $this->headless
-            ? new NullTextureManager($config->assetsPath)
-            : new TextureManager($config->assetsPath);
+
+        // Vio TextureManager needs the VioContext — deferred to run()
+        if ($this->headless) {
+            $this->textures = new NullTextureManager($config->assetsPath);
+        } elseif ($this->useVio) {
+            $this->textures = new NullTextureManager($config->assetsPath);
+        } else {
+            $this->textures = new TextureManager($config->assetsPath);
+        }
+
         $this->gameLoop = new GameLoop($config->targetTickRate);
         $this->scenes = new SceneManager($this);
-        $this->audio = new AudioManager(
-            $this->headless ? null : new GLFWAudioBackend(),
-        );
+        $audioBackend = null;
+        if (!$this->headless) {
+            $audioBackend = $this->useVio ? new VioAudioBackend() : new GLFWAudioBackend();
+        }
+        $this->audio = new AudioManager($audioBackend);
         $this->locale = new LocaleManager($config->defaultLocale, $config->fallbackLocale);
         $this->saves = new SaveManager($config->savePath, $config->maxSaveSlots);
         $this->scheduler = ThreadSchedulerFactory::create($config);
 
+        if ($config->meshCachePath !== '') {
+            MeshCache::configure($config->meshCachePath);
+        }
+
         if ($config->is3D) {
             $this->commandList3D = new RenderCommandList();
-            // Non-headless GPU renderers require a GL/Vulkan context — initialized in run()
             if ($this->headless || $config->renderBackend3D === 'null') {
                 $this->renderer3D = new NullRenderer3D($config->width, $config->height);
             } else {
@@ -108,6 +129,14 @@ class Engine
         if ($this->headless) {
             $this->window = new NullWindow($config->width, $config->height, $config->title);
             $this->renderer2D = new NullRenderer2D($config->width, $config->height);
+        } elseif ($this->useVio) {
+            $this->window = new VioWindow(
+                $config->width,
+                $config->height,
+                $config->title,
+                $config->vsync,
+                $config->resizable,
+            );
         } else {
             $noApi = $config->is3D && in_array($config->renderBackend3D, ['vulkan', 'metal'], true);
             $this->window = new Window(
@@ -156,39 +185,59 @@ class Engine
 
         // Create GPU-backed renderers after window is initialized (need graphics context)
         if (!$this->headless && $this->config->is3D) {
-            $this->renderer3D = match ($this->config->renderBackend3D) {
-                'vulkan' => new VulkanRenderer3D(
+            if ($this->useVio && $this->window instanceof VioWindow) {
+                $this->renderer3D = new VioRenderer3D(
+                    $this->window->getContext(),
                     $this->window->getFramebufferWidth(),
                     $this->window->getFramebufferHeight(),
-                    $this->window->getHandle(),
-                ),
-                'metal' => new MetalRenderer3D(
-                    $this->window->getFramebufferWidth(),
-                    $this->window->getFramebufferHeight(),
-                    $this->window->getHandle(),
-                ),
-                default => new OpenGLRenderer3D(
-                    $this->window->getFramebufferWidth(),
-                    $this->window->getFramebufferHeight(),
-                ),
-            };
+                );
+            } else {
+                $this->renderer3D = match ($this->config->renderBackend3D) {
+                    'vulkan' => new VulkanRenderer3D(
+                        $this->window->getFramebufferWidth(),
+                        $this->window->getFramebufferHeight(),
+                        $this->window->getHandle(),
+                    ),
+                    'metal' => new MetalRenderer3D(
+                        $this->window->getFramebufferWidth(),
+                        $this->window->getFramebufferHeight(),
+                        $this->window->getHandle(),
+                    ),
+                    default => new OpenGLRenderer3D(
+                        $this->window->getFramebufferWidth(),
+                        $this->window->getFramebufferHeight(),
+                    ),
+                };
+            }
         }
 
-        // Create Renderer2D after window is initialized (needs GL context)
-        // Metal/Vulkan backends don't have an OpenGL context — use NullRenderer2D for 2D overlay.
-        if (!$this->headless && !$nativeBackend) {
+        // Create Renderer2D after window is initialized (needs GL/vio context)
+        if (!$this->headless && $this->useVio && $this->window instanceof VioWindow) {
+            $vioCtx = $this->window->getContext();
+
+            $vioRenderer = new VioRenderer2D($vioCtx);
+            $this->renderer2D = $vioRenderer;
+
+            $vioTextures = new VioTextureManager($vioCtx, $this->config->assetsPath);
+            $vioTextures->setRenderer($vioRenderer);
+            $this->textures = $vioTextures;
+
+            $fontDir = $this->resolveEngineFontDir();
+            if ($fontDir !== null && is_dir($fontDir)) {
+                $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
+                $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
+                $this->renderer2D->setFont('regular');
+            }
+        } elseif (!$this->headless && !$nativeBackend) {
             $this->renderer2D = new Renderer2D($this->window);
 
-            // Auto-load bundled fonts so text renders without manual setup.
-            // NanoVG (C library) cannot read phar:// paths, so when running
-            // inside a PHAR we extract engine fonts to the filesystem first.
             $fontDir = $this->resolveEngineFontDir();
             if ($fontDir !== null && is_dir($fontDir)) {
                 $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
                 $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
                 $this->renderer2D->setFont('regular');
 
-                // CJK fallback fonts for Japanese, Korean, Chinese
+                // CJK fallback fonts (NanoVG-specific)
                 $cjkDir = $fontDir . '/noto-sans-cjk';
                 if (is_dir($cjkDir)) {
                     $vg = $this->renderer2D->getVGContext();

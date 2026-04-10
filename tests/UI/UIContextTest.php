@@ -43,6 +43,7 @@ class UIContextTest extends TestCase
             public function drawRect(float $x, float $y, float $w, float $h, Color $color): void { $this->record('drawRect', func_get_args()); }
             public function drawRectOutline(float $x, float $y, float $w, float $h, Color $color, float $lineWidth = 1.0): void { $this->record('drawRectOutline', func_get_args()); }
             public function drawRoundedRect(float $x, float $y, float $w, float $h, float $radius, Color $color): void { $this->record('drawRoundedRect', func_get_args()); }
+            public function drawRoundedRectOutline(float $x, float $y, float $w, float $h, float $radius, Color $color, float $lineWidth = 1.0): void {}
             public function drawCircle(float $cx, float $cy, float $r, Color $color): void { $this->record('drawCircle', func_get_args()); }
             public function drawCircleOutline(float $cx, float $cy, float $r, Color $color, float $lineWidth = 1.0): void {}
             public function drawLine(Vec2 $from, Vec2 $to, Color $color, float $width = 1.0): void {}

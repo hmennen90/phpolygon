@@ -1,0 +1,232 @@
+<?php
+
+declare(strict_types=1);
+
+namespace PHPolygon\Runtime;
+
+use PHPolygon\Math\Vec2;
+use VioContext;
+
+class VioInput implements InputInterface
+{
+    private ?VioContext $ctx = null;
+
+    /**
+     * Buffered key press events from GLFW callback. Survives across multiple
+     * render frames until consumed by isKeyPressed(). This decouples edge
+     * detection from the render frame rate (vio_begin resets C-level keys_prev
+     * every render, but the fixed timestep may run fewer updates than renders).
+     *
+     * @var array<int, bool>
+     */
+    private array $keyJustPressed = [];
+
+    /** @var array<int, bool> */
+    private array $keyJustReleased = [];
+
+    /** @var array<int, bool> Previous frame mouse button state */
+    private array $mousePrev = [];
+
+    /** @var array<int, bool> Buffered press edges (survive across render frames) */
+    private array $mouseJustPressed = [];
+
+    /** @var array<int, bool> Buffered release edges (survive across render frames) */
+    private array $mouseJustReleased = [];
+
+    /** @var list<string> Characters typed this frame */
+    private array $charBuffer = [];
+
+    private bool $suppressed = false;
+    private int $suppressFrames = 0;
+    private float $suppressUntil = 0.0;
+
+    public function setContext(VioContext $ctx): void
+    {
+        $this->ctx = $ctx;
+
+        vio_on_key($ctx, function (int $key, int $action, int $mods): void {
+            if ($action === 1) { // GLFW_PRESS
+                $this->keyJustPressed[$key] = true;
+            } elseif ($action === 0) { // GLFW_RELEASE
+                $this->keyJustReleased[$key] = true;
+            }
+        });
+
+        vio_on_char($ctx, function (int $codepoint): void {
+            $this->charBuffer[] = mb_chr($codepoint, 'UTF-8');
+        });
+    }
+
+    public function isKeyDown(int $key): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+        return vio_key_pressed($this->ctx, $key);
+    }
+
+    public function isKeyPressed(int $key): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+        if ($this->keyJustPressed[$key] ?? false) {
+            unset($this->keyJustPressed[$key]);
+            return true;
+        }
+        return false;
+    }
+
+    public function isKeyReleased(int $key): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+        if ($this->keyJustReleased[$key] ?? false) {
+            unset($this->keyJustReleased[$key]);
+            return true;
+        }
+        return false;
+    }
+
+    public function isMouseButtonDown(int $button): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+        return vio_mouse_button($this->ctx, $button);
+    }
+
+    public function isMouseButtonPressed(int $button): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+        if ($this->mouseJustPressed[$button] ?? false) {
+            unset($this->mouseJustPressed[$button]);
+            return true;
+        }
+        return false;
+    }
+
+    public function isMouseButtonReleased(int $button): bool
+    {
+        if ($this->ctx === null) {
+            return false;
+        }
+        if ($this->mouseJustReleased[$button] ?? false) {
+            unset($this->mouseJustReleased[$button]);
+            return true;
+        }
+        return false;
+    }
+
+    public function getMousePosition(): Vec2
+    {
+        if ($this->ctx === null) {
+            return new Vec2(0.0, 0.0);
+        }
+        $pos = vio_mouse_position($this->ctx);
+        return new Vec2($pos[0], $pos[1]);
+    }
+
+    public function getMouseX(): float
+    {
+        if ($this->ctx === null) {
+            return 0.0;
+        }
+        return vio_mouse_position($this->ctx)[0];
+    }
+
+    public function getMouseY(): float
+    {
+        if ($this->ctx === null) {
+            return 0.0;
+        }
+        return vio_mouse_position($this->ctx)[1];
+    }
+
+    public function getScrollX(): float
+    {
+        if ($this->ctx === null) {
+            return 0.0;
+        }
+        return vio_mouse_scroll($this->ctx)[0];
+    }
+
+    public function getScrollY(): float
+    {
+        if ($this->ctx === null) {
+            return 0.0;
+        }
+        return vio_mouse_scroll($this->ctx)[1];
+    }
+
+    public function getCharsTyped(): array
+    {
+        return $this->charBuffer;
+    }
+
+    public function getTextInput(): string
+    {
+        return implode('', $this->charBuffer);
+    }
+
+    public function suppress(int $frames = 0, float $seconds = 0.0): void
+    {
+        $this->suppressed = true;
+        if ($frames > 0) {
+            $this->suppressFrames = $frames;
+        }
+        if ($seconds > 0.0) {
+            $this->suppressUntil = microtime(true) + $seconds;
+        }
+    }
+
+    public function unsuppress(): void
+    {
+        $this->suppressed = false;
+        $this->suppressFrames = 0;
+        $this->suppressUntil = 0.0;
+    }
+
+    public function isSuppressed(): bool
+    {
+        return $this->suppressed || $this->suppressFrames > 0 || microtime(true) < $this->suppressUntil;
+    }
+
+    public function endFrame(): void
+    {
+        // Detect and accumulate mouse button edges. Unlike keys (which have a
+        // GLFW callback via vio_on_key), mouse buttons are polled. We compare
+        // current vs prev each render frame and ACCUMULATE edges so they survive
+        // until the next update tick consumes them.
+        if ($this->ctx !== null) {
+            for ($i = 0; $i <= 7; $i++) {
+                $current = vio_mouse_button($this->ctx, $i);
+                $prev = $this->mousePrev[$i] ?? false;
+                if ($current && !$prev) {
+                    $this->mouseJustPressed[$i] = true;
+                }
+                if (!$current && $prev) {
+                    $this->mouseJustReleased[$i] = true;
+                }
+                $this->mousePrev[$i] = $current;
+            }
+        }
+
+        $this->charBuffer = [];
+
+        if ($this->suppressed) {
+            if ($this->suppressFrames > 0) {
+                $this->suppressFrames--;
+            }
+            $framesExpired = $this->suppressFrames <= 0;
+            $timeExpired = $this->suppressUntil <= 0.0 || microtime(true) >= $this->suppressUntil;
+            if ($framesExpired && $timeExpired) {
+                $this->suppressed = false;
+                $this->suppressUntil = 0.0;
+            }
+        }
+    }
+}

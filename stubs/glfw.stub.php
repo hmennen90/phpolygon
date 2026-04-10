@@ -10,4 +10,4 @@ function glGenFramebuffers(int $n, int &$framebuffers): void {}
 function glGenRenderbuffers(int $n, int &$renderbuffers): void {}
 
 /** Returns the NSWindow pointer for a GLFW window (macOS only). */
-function glfwGetCocoaWindow(\GLFWwindow $window): int {}
+function glfwGetCocoaWindow(object $window): int {}

@@ -175,7 +175,7 @@ class VulkanRenderer3D implements Renderer3DInterface
     private const VK_STAGE_TRANSFER            = 0x1000;   // TRANSFER
     private const VK_STAGE_BOTTOM              = 0x2000;   // BOTTOM_OF_PIPE
 
-    public function __construct(int $width, int $height, \GLFWwindow $windowHandle)
+    public function __construct(int $width, int $height, object $windowHandle)
     {
         $this->width  = $width;
         $this->height = $height;

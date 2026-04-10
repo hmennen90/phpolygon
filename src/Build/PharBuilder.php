@@ -90,6 +90,12 @@ class PharBuilder
             }
         }
 
+        // Stage mesh cache if present
+        $meshCacheDir = $projectRoot . '/.phpolygon/mesh-cache';
+        if (is_dir($meshCacheDir)) {
+            $this->copyDirectory($meshCacheDir, $stagingDir . '/resources/meshes');
+        }
+
         // Stage assets/ directory
         $assetsDir = $projectRoot . '/assets';
         if (is_dir($assetsDir)) {
