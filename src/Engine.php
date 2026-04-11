@@ -222,6 +222,10 @@ class Engine
             $vioTextures->setRenderer($vioRenderer);
             $this->textures = $vioTextures;
 
+            if ($this->renderer3D instanceof VioRenderer3D) {
+                $this->renderer3D->setTextureManager($vioTextures);
+            }
+
             $fontDir = $this->resolveEngineFontDir();
             if ($fontDir !== null && is_dir($fontDir)) {
                 $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
@@ -297,10 +301,10 @@ class Engine
                         ($this->onRender)($this, $interpolation);
                     }
 
-                    $this->renderer2D->endFrame();
                     if ($this->renderer3D !== null) {
                         $this->renderer3D->endFrame();
                     }
+                    $this->renderer2D->endFrame();
                     if (!$nativeBackend) {
                         $this->window->swapBuffers();
                     }
@@ -346,10 +350,10 @@ class Engine
                         ($this->onRender)($this, $interpolation);
                     }
 
-                    $this->renderer2D->endFrame();
                     if ($this->renderer3D !== null) {
                         $this->renderer3D->endFrame();
                     }
+                    $this->renderer2D->endFrame();
                     if (!$nativeBackend) {
                         $this->window->swapBuffers();
                     }

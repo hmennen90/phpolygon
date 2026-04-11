@@ -6,8 +6,8 @@ namespace PHPolygon\Rendering;
 
 /**
  * Material definition for 3D rendering.
- * Phase 7: color-based (albedo, roughness, metallic, emission).
- * Phase 8+: texture support will be added via optional texture IDs.
+ * Supports color-based properties and optional albedo texture.
+ * When albedoTexture is set, the texture is sampled and multiplied with the albedo color.
  */
 class Material
 {
@@ -18,6 +18,7 @@ class Material
         public readonly Color $emission = new Color(0.0, 0.0, 0.0),
         public readonly float $alpha = 1.0,
         public readonly string $shader = 'default',
+        public readonly ?string $albedoTexture = null,
     ) {}
 
     public static function default(): self

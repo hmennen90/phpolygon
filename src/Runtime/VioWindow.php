@@ -166,7 +166,12 @@ class VioWindow extends Window
 
     public function setSize(int $width, int $height): void
     {
-        // vio does not expose resize yet
+        if (!$this->initialized) {
+            $this->width = $width;
+            $this->height = $height;
+            return;
+        }
+        vio_set_window_size($this->ctx, $width, $height);
     }
 
     public function toggleFullscreen(): void
@@ -191,6 +196,16 @@ class VioWindow extends Window
     public function getContext(): VioContext
     {
         return $this->ctx;
+    }
+
+    public function setCursorDisabled(): void
+    {
+        // No cursor API in vio yet — no-op
+    }
+
+    public function setCursorNormal(): void
+    {
+        // No cursor API in vio yet — no-op
     }
 
     public function destroy(): void
