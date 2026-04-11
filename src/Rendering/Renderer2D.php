@@ -150,7 +150,6 @@ class Renderer2D implements Renderer2DInterface
         $this->vg->textAlign(VGAlign::LEFT | VGAlign::TOP);
         $bounds = new \GL\Math\Vec4(0.0, 0.0, 0.0, 0.0);
         $this->vg->textBounds(0, 0, $text, $bounds);
-        \assert($bounds instanceof \GL\Math\Vec4);
         $textW = $bounds->z - $bounds->x;
         $textH = $bounds->w - $bounds->y;
 
@@ -243,7 +242,6 @@ class Renderer2D implements Renderer2DInterface
         $this->vg->fontSize($size);
         $bounds = new \GL\Math\Vec4(0.0, 0.0, 0.0, 0.0);
         $this->vg->textBounds(0, 0, $text, $bounds);
-        \assert($bounds instanceof \GL\Math\Vec4);
         return new TextMetrics($bounds->z - $bounds->x, $bounds->w - $bounds->y);
     }
 
@@ -253,7 +251,6 @@ class Renderer2D implements Renderer2DInterface
         $this->vg->fontSize($size);
         $bounds = new \GL\Math\Vec4(0.0, 0.0, 0.0, 0.0);
         $this->vg->textBoxBounds(0, 0, $breakWidth, $text, $bounds);
-        \assert($bounds instanceof \GL\Math\Vec4);
         return new TextMetrics($bounds->z - $bounds->x, $bounds->w - $bounds->y);
     }
 

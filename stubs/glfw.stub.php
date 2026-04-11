@@ -2,6 +2,11 @@
 
 /**
  * PHPStan stubs for ext-glfw (php-glfw).
+ *
+ * After the switch to php-vio as the primary dependency, ext-glfw is no longer
+ * installed in CI. These stubs declare all symbols that the OpenGL-based
+ * Renderer2D and MetalRenderer3D still reference so that PHPStan can analyse
+ * them without the extension present.
  */
 
 namespace {
@@ -24,8 +29,72 @@ namespace GL\Math {
 }
 
 namespace GL\VectorGraphics {
+    class VGColor {
+        public function __construct(float $r, float $g, float $b, float $a) {}
+    }
+
+    class VGPaint {}
+
+    class VGImage {
+        public function makePaint(float $ox, float $oy, float $ex, float $ey, float $angle, float $alpha): VGPaint {}
+    }
+
+    class VGAlign {
+        public const LEFT   = 1;
+        public const CENTER = 2;
+        public const RIGHT  = 4;
+        public const TOP    = 8;
+        public const MIDDLE = 16;
+        public const BOTTOM = 32;
+    }
+
     class VGContext {
-        public function textBounds(float $x, float $y, string $text, \GL\Math\Vec4 &$bounds): float {}
-        public function textBoxBounds(float $x, float $y, float $breakWidth, string $text, \GL\Math\Vec4 &$bounds): void {}
+        public const ANTIALIAS       = 1;
+        public const STENCIL_STROKES = 2;
+
+        public function __construct(int $flags = 0) {}
+
+        // Frame lifecycle
+        public function beginFrame(float $windowWidth, float $windowHeight, float $devicePixelRatio): void {}
+        public function endFrame(): void {}
+
+        // Path
+        public function beginPath(): void {}
+        public function rect(float $x, float $y, float $w, float $h): void {}
+        public function roundedRect(float $x, float $y, float $w, float $h, float $r): void {}
+        public function circle(float $cx, float $cy, float $r): void {}
+        public function arc(float $cx, float $cy, float $r, float $a0, float $a1, int $dir): void {}
+        public function moveTo(float $x, float $y): void {}
+        public function lineTo(float $x, float $y): void {}
+
+        // Fill & stroke
+        public function fill(): void {}
+        public function stroke(): void {}
+        public function fillColor(VGColor $color): void {}
+        public function strokeColor(VGColor $color): void {}
+        public function fillPaint(VGPaint $paint): void {}
+        public function strokeWidth(float $width): void {}
+
+        // Text
+        public function fontFace(string $font): void {}
+        public function fontSize(float $size): void {}
+        public function textAlign(int $align): void {}
+        public function text(float $x, float $y, string $string): float { return 0.0; }
+        public function textBox(float $x, float $y, float $breakRowWidth, string $string): void {}
+        public function textBounds(float $x, float $y, string $string, \GL\Math\Vec4 &$bounds): float { return 0.0; }
+        public function textBoxBounds(float $x, float $y, float $breakWidth, string $string, \GL\Math\Vec4 &$bounds): void {}
+        public function createFont(string $name, string $filename): int { return 0; }
+        public function addFallbackFont(string $baseFont, string $fallbackFont): void {}
+
+        // Transform & state
+        public function save(): void {}
+        public function restore(): void {}
+        public function transform(float $a, float $b, float $c, float $d, float $e, float $f): void {}
+        public function scissor(float $x, float $y, float $w, float $h): void {}
+        public function resetScissor(): void {}
+        public function globalAlpha(float $alpha): void {}
+
+        // Images
+        public function imageFromHandle(int $textureId, int $w, int $h, int $imageFlags, int $flags): VGImage {}
     }
 }
