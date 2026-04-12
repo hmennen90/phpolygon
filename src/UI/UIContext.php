@@ -112,6 +112,7 @@ class UIContext
         $this->flow = $flow;
         $this->anyHovered = false;
         $this->renderer->setFont($this->style->fontName);
+        $this->renderer->setTextAlign(\PHPolygon\Rendering\TextAlign::LEFT | \PHPolygon\Rendering\TextAlign::TOP);
     }
 
     /**

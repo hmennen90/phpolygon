@@ -95,7 +95,9 @@ class LocaleManager
             throw new \RuntimeException("Translation directory not found: {$directory}");
         }
 
-        $files = glob($directory . '/*.json');
+        // Normalize path separators for cross-platform glob() compatibility
+        $normalizedDir = str_replace('\\', '/', $directory);
+        $files = glob($normalizedDir . '/*.json');
         if ($files === false) {
             return;
         }

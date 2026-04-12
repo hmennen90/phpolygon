@@ -160,6 +160,32 @@ class VioRenderer2D implements Renderer2DInterface
         if ($font === null) {
             return;
         }
+
+        // Apply text alignment by adjusting coordinates.
+        // vio_text renders from the BASELINE, so we must compensate.
+        $align = $this->textAlign;
+        $metrics = vio_text_measure($font, $text);
+        $tw = (float)$metrics['width'];
+        $th = (float)$metrics['height'];
+        $ascender = $th * 0.65;
+
+        // Horizontal
+        if ($align & TextAlign::CENTER) {
+            $x -= $tw / 2.0;
+        } elseif ($align & TextAlign::RIGHT) {
+            $x -= $tw;
+        }
+
+        // Vertical — convert from alignment anchor to baseline position
+        if ($align & TextAlign::TOP) {
+            $y += $ascender;
+        } elseif ($align & TextAlign::MIDDLE) {
+            $y += $ascender - $th / 2.0;
+        } elseif ($align & TextAlign::BOTTOM) {
+            $y += $ascender - $th;
+        }
+        // BASELINE: y is already the baseline, no adjustment
+
         vio_text($this->ctx, $font, $text, $x, $y, ['color' => $this->colorToArgb($color), 'z' => $this->nextZ()]);
     }
 
@@ -170,8 +196,11 @@ class VioRenderer2D implements Renderer2DInterface
             return;
         }
         $metrics = vio_text_measure($font, $text);
+        $th = (float)$metrics['height'];
+        $ascender = $th * 0.65;
         $x = $cx - $metrics['width'] / 2.0;
-        $y = $cy - $metrics['height'] / 2.0;
+        // vio_text renders from baseline — offset to visual center
+        $y = $cy + $ascender - $th / 2.0;
         vio_text($this->ctx, $font, $text, $x, $y, ['color' => $this->colorToArgb($color), 'z' => $this->nextZ()]);
     }
 
@@ -183,16 +212,20 @@ class VioRenderer2D implements Renderer2DInterface
         }
         $argb = $this->colorToArgb($color);
         $z = $this->nextZ();
+        $align = $this->textAlign;
         $words = explode(' ', $text);
         $line = '';
-        $lineY = $y;
         $lineHeight = $size * 1.2;
+        // vio_text renders from baseline — offset each line by ascender
+        $ascender = $size * 0.65;
+        $lineY = $y + $ascender;
 
         foreach ($words as $word) {
             $testLine = $line === '' ? $word : $line . ' ' . $word;
             $metrics = vio_text_measure($font, $testLine);
             if ($metrics['width'] > $breakWidth && $line !== '') {
-                vio_text($this->ctx, $font, $line, $x, $lineY, ['color' => $argb, 'z' => $z]);
+                $lx = $this->alignTextX($font, $line, $x, $breakWidth, $align);
+                vio_text($this->ctx, $font, $line, $lx, $lineY, ['color' => $argb, 'z' => $z]);
                 $lineY += $lineHeight;
                 $line = $word;
             } else {
@@ -200,7 +233,8 @@ class VioRenderer2D implements Renderer2DInterface
             }
         }
         if ($line !== '') {
-            vio_text($this->ctx, $font, $line, $x, $lineY, ['color' => $argb, 'z' => $z]);
+            $lx = $this->alignTextX($font, $line, $x, $breakWidth, $align);
+            vio_text($this->ctx, $font, $line, $lx, $lineY, ['color' => $argb, 'z' => $z]);
         }
     }
 
@@ -377,6 +411,22 @@ class VioRenderer2D implements Renderer2DInterface
         return $this->ctx;
     }
 
+    /**
+     * Adjust X position for horizontal text alignment within a text box.
+     */
+    private function alignTextX(VioFont $font, string $text, float $x, float $boxWidth, int $align): float
+    {
+        if ($align & TextAlign::CENTER) {
+            $metrics = vio_text_measure($font, $text);
+            return $x + ($boxWidth - (float)$metrics['width']) / 2.0;
+        }
+        if ($align & TextAlign::RIGHT) {
+            $metrics = vio_text_measure($font, $text);
+            return $x + $boxWidth - (float)$metrics['width'];
+        }
+        return $x;
+    }
+
     private function resolveFont(float $size): ?VioFont
     {
         if ($this->currentFontName === '' || !isset($this->fontPaths[$this->currentFontName])) {
@@ -404,7 +454,7 @@ class VioRenderer2D implements Renderer2DInterface
 
     private function colorToArgb(Color $color): int
     {
-        $a = ((int)($color->a * 255)) & 0xFF;
+        $a = ((int)($color->a * $this->globalAlpha * 255)) & 0xFF;
         $r = ((int)($color->r * 255)) & 0xFF;
         $g = ((int)($color->g * 255)) & 0xFF;
         $b = ((int)($color->b * 255)) & 0xFF;
