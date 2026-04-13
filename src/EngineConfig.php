@@ -27,5 +27,7 @@ class EngineConfig
         public readonly ?ThreadingMode $threadingMode = null,
         public readonly ?InputInterface $input = null,
         public readonly string $meshCachePath = '',
+        public readonly bool $skipSplash = false,
+        public readonly float $splashDuration = 2.5,
     ) {}
 }

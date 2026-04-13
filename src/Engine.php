@@ -12,8 +12,10 @@ use PHPolygon\Event\EventDispatcher;
 use PHPolygon\Geometry\MeshCache;
 use PHPolygon\Locale\LocaleManager;
 use PHPolygon\Rendering\Camera2D;
+use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\NullRenderer2D;
 use PHPolygon\Rendering\MetalRenderer3D;
+use PHPolygon\Rendering\TextAlign;
 use PHPolygon\Rendering\NullRenderer3D;
 use PHPolygon\Rendering\OpenGLRenderer3D;
 use PHPolygon\Rendering\VulkanRenderer3D;
@@ -257,6 +259,10 @@ class Engine
             $this->renderer2D = new NullRenderer2D($this->config->width, $this->config->height);
         }
 
+        if (!$this->headless && !$this->config->skipSplash) {
+            $this->showSplashScreen();
+        }
+
         if ($this->onInit !== null) {
             ($this->onInit)($this);
         }
@@ -467,6 +473,118 @@ class Engine
 
             $this->input->endFrame();
         }
+    }
+
+    private function showSplashScreen(): void
+    {
+        $w = $this->renderer2D->getWidth();
+        $h = $this->renderer2D->getHeight();
+        $black = new Color(0.0, 0.0, 0.0);
+        $white = new Color(1.0, 1.0, 1.0);
+        $duration = $this->config->splashDuration;
+
+        // Try to load the engine logo
+        $logo = null;
+        $logoPath = __DIR__ . '/../resources/branding/logo.png';
+        if (!str_starts_with($logoPath, 'phar://') && file_exists($logoPath)) {
+            $logo = $this->textures->load('_engine_splash_logo', $logoPath);
+        } elseif (defined('PHPOLYGON_PATH_RESOURCES')) {
+            /** @var string $resDir */
+            $resDir = PHPOLYGON_PATH_RESOURCES;
+            $pharLogo = $resDir . '/branding/logo.png';
+            if (file_exists($pharLogo)) {
+                $logo = $this->textures->load('_engine_splash_logo', $pharLogo);
+            }
+        }
+
+        $gray = new Color(0.5, 0.5, 0.5);
+        $rendererInfo = $this->buildRendererInfo();
+
+        $startTime = microtime(true);
+
+        while (!$this->window->shouldClose()) {
+            $elapsed = microtime(true) - $startTime;
+            if ($elapsed >= $duration) {
+                break;
+            }
+
+            // Fade: in for first 0.4s, out for last 0.5s, full in between
+            $alpha = 1.0;
+            $fadeIn = 0.4;
+            $fadeOut = 0.5;
+            if ($elapsed < $fadeIn) {
+                $alpha = $elapsed / $fadeIn;
+            } elseif ($elapsed > $duration - $fadeOut) {
+                $alpha = ($duration - $elapsed) / $fadeOut;
+            }
+            $alpha = max(0.0, min(1.0, $alpha));
+
+            $this->renderer2D->beginFrame();
+            $this->renderer2D->clear($black);
+            $this->renderer2D->setGlobalAlpha((float) $alpha);
+
+            if ($logo !== null) {
+                // Scale logo to fit ~60% of window width, maintain aspect ratio
+                $maxW = $w * 0.6;
+                $scale = $maxW / $logo->width;
+                $logoW = $logo->width * $scale;
+                $logoH = $logo->height * $scale;
+                $logoX = ($w - $logoW) / 2;
+                $logoY = ($h - $logoH) / 2;
+
+                $this->renderer2D->drawSprite($logo, null, (float) $logoX, (float) $logoY, (float) $logoW, (float) $logoH);
+
+                // "Developed with" above the logo
+                $this->renderer2D->setFont('regular');
+                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::BOTTOM);
+                $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($logoY - 12), 18.0, $white);
+
+                // Renderer info below the logo
+                if ($rendererInfo !== '') {
+                    $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::TOP);
+                    $this->renderer2D->drawText($rendererInfo, (float) ($w / 2), (float) ($logoY + $logoH + 16), 14.0, $gray);
+                }
+            } else {
+                // Text-only fallback
+                $this->renderer2D->setFont('regular');
+                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::MIDDLE);
+                $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($h / 2 - 30), 18.0, $white);
+                $this->renderer2D->drawText('PHPolygon', (float) ($w / 2), (float) ($h / 2 + 20), 42.0, $white);
+
+                if ($rendererInfo !== '') {
+                    $this->renderer2D->drawText($rendererInfo, (float) ($w / 2), (float) ($h / 2 + 60), 14.0, $gray);
+                }
+            }
+
+            $this->renderer2D->setGlobalAlpha(1.0);
+            $this->renderer2D->setTextAlign(TextAlign::LEFT | TextAlign::TOP);
+            $this->renderer2D->endFrame();
+            $this->window->swapBuffers();
+            $this->window->pollEvents();
+        }
+
+        // Clean up splash texture
+        $this->textures->unload('_engine_splash_logo');
+    }
+
+    public function buildRendererInfo(): string
+    {
+        $parts = [];
+        $parts[] = match (true) {
+            $this->renderer2D instanceof VioRenderer2D => 'Vio 2D',
+            $this->renderer2D instanceof Renderer2D => 'OpenGL 2D',
+            default => null,
+        };
+        if ($this->renderer3D !== null) {
+            $parts[] = match (true) {
+                $this->renderer3D instanceof VioRenderer3D => 'Vio 3D',
+                $this->renderer3D instanceof VulkanRenderer3D => 'Vulkan',
+                $this->renderer3D instanceof MetalRenderer3D => 'Metal',
+                $this->renderer3D instanceof OpenGLRenderer3D => 'OpenGL 3D',
+                default => null,
+            };
+        }
+        return implode(' · ', array_filter($parts));
     }
 
     private function shutdown(): void

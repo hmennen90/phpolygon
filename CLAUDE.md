@@ -14,11 +14,14 @@ no external 3D modelling tools (Blender, Maya, etc.) and no imported model files
 from PHP code.
 
 Render backends:
-- **2D:** OpenGL 4.1 via php-glfw / NanoVG — active, all phases
-- **3D (Phase 7):** OpenGL 4.1 via php-glfw — first 3D backend, validates the
-  `RenderCommandList` abstraction
-- **3D (Phase 8):** Vulkan via php-vulkan — high-performance backend, drop-in
-  replacement behind the same interface
+- **2D:** php-vio (primary) or OpenGL 4.1 via php-glfw / NanoVG (fallback)
+- **3D:** php-vio, Vulkan via php-vulkan, Metal via MoltenVK, or OpenGL 4.1 via
+  php-glfw — all behind a unified `Renderer3DInterface` / `RenderCommandList`
+
+The engine auto-detects php-vio at startup. When available, it provides the window,
+input, audio, 2D renderer, 3D renderer, and texture manager through a single
+unified backend. When php-vio is not loaded, the engine falls back to php-glfw
+(2D/3D) or php-vulkan (3D).
 
 Games are built in separate repositories and require `phpolygon/phpolygon`
 via Composer.
@@ -52,8 +55,8 @@ via Composer.
 ### Render interface: Layered
 - `RenderContextInterface` — base: `beginFrame()`, `endFrame()`, `clear()`,
   `setViewport()`
-- `Renderer2DInterface extends RenderContextInterface` — NanoVG backend for 2D games
-- `Renderer3DInterface extends RenderContextInterface` — 3D backend (OpenGL or Vulkan)
+- `Renderer2DInterface extends RenderContextInterface` — 2D backend (VioRenderer2D or NanoVG Renderer2D)
+- `Renderer3DInterface extends RenderContextInterface` — 3D backend (Vio, Vulkan, Metal, or OpenGL)
 
 `Renderer3DInterface` is driven by a **RenderCommandList** from day one. PHP builds
 the command list; the backend executes it. This keeps game code fully backend-agnostic:
@@ -63,9 +66,9 @@ Game Code / Scene
       ↓  (builds)
 RenderCommandList        ← pure PHP data, no GPU calls
       ↓  (executed by)
-┌──────────────────┬──────────────────┬──────────────────┐
-OpenGLRenderer3D   VulkanRenderer3D   NullRenderer3D
-(Phase 7, active)  (Phase 8, planned)  (headless / tests)
+┌───────────────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐
+VioRenderer3D   OpenGLRenderer3D   VulkanRenderer3D   MetalRenderer3D   NullRenderer3D
+(primary)       (fallback)         (native Vulkan)    (MoltenVK/macOS)  (headless/tests)
 ```
 
 **Do not design `Renderer3DInterface` around the OpenGL state-machine model.**
@@ -151,14 +154,19 @@ shader does not declare are silently ignored — a minimal shader only needs
 ### GPU backends
 | Backend | Status | Target |
 |---|---|---|
-| OpenGL 4.1 via php-glfw (2D/NanoVG) | Active | 2D games, all phases |
-| OpenGL 4.1 via php-glfw (3D) | **Phase 7 — active development** | 3D games, first backend |
-| Vulkan via php-vulkan | Phase 8 | 3D games, production backend |
+| php-vio (2D + 3D unified) | **Primary** | All platforms when php-vio is loaded |
+| OpenGL 4.1 via php-glfw (2D/NanoVG) | Fallback | 2D games when php-vio unavailable |
+| OpenGL 4.1 via php-glfw (3D) | Fallback | 3D games when php-vio unavailable |
+| Vulkan via php-vulkan | Active | 3D native Vulkan backend |
+| Metal via MoltenVK | Active | 3D on macOS via MoltenVK |
 | D3D11 / D3D12 | Cancelled | — |
-| Metal | Not planned | — |
 
 **D3D is permanently out of scope.** Do not add D3D stubs, interfaces, or comments.
 Vulkan covers Windows natively; MoltenVK covers macOS.
+
+The engine selects the backend automatically at startup:
+1. If `extension_loaded('vio')` → Vio backends for window, input, audio, 2D, 3D, textures
+2. Otherwise → GLFW window/input, NanoVG 2D, OpenGL/Vulkan/Metal 3D (per `renderBackend3D` config)
 
 ### Shaders
 - Authoring language: **GLSL** (human- and AI-readable plaintext)
@@ -297,12 +305,26 @@ Benefits of this approach over file-based assets:
 
 | Extension | Purpose | Status |
 |---|---|---|
-| php-glfw | OpenGL 4.1 + NanoVG (2D and 3D rendering) | Active |
-| php-vulkan | Vulkan (3D production backend) | Available, Phase 8 |
+| php-vio | Unified backend: window, input, audio, 2D/3D rendering, textures | **Primary** |
+| php-glfw | OpenGL 4.1 + NanoVG (2D and 3D rendering) | Fallback when php-vio unavailable |
+| php-vulkan | Vulkan (3D native backend) | Active |
 | php-steamworks | Steamworks SDK integration | Published on Packagist |
 
 When writing engine code that touches GPU, Steam, or audio — use the extension.
 Do not wrap extension calls in FFI unless there is an explicit reason.
+
+### Vio backend classes
+
+When php-vio is loaded, the engine uses these implementations:
+
+| Standard class | Vio replacement | Notes |
+|---|---|---|
+| `Window` (GLFW) | `VioWindow` | `vio_create()` backend |
+| `Input` (GLFW callbacks) | `VioInput` | Unified input from Vio context |
+| `Renderer2D` (NanoVG) | `VioRenderer2D` | `vio_rect()`, `vio_text()`, `vio_sprite()` etc. |
+| `Renderer3D` (OpenGL) | `VioRenderer3D` | 3D rendering through Vio context |
+| `TextureManager` (GL) | `VioTextureManager` | `vio_texture()`, registers with VioRenderer2D |
+| `GLFWAudioBackend` | `VioAudioBackend` | Audio through Vio context |
 
 ---
 
@@ -519,12 +541,14 @@ $engine = new Engine(new EngineConfig(headless: true));
 
 ### How it works
 
-| Normal mode | Headless mode |
-|---|---|
-| `Window` (GLFW) | `NullWindow` (no-op, configurable dimensions) |
-| `Renderer2D` (NanoVG/OpenGL) | `NullRenderer2D` (accepts all draws, no output) |
-| `Renderer3D` (OpenGL/Vulkan) | `NullRenderer3D` (accepts all commands, no output) |
-| `TextureManager` (GL textures) | `NullTextureManager` (dummy textures with dimensions) |
+| Normal mode (Vio) | Normal mode (GLFW) | Headless mode |
+|---|---|---|
+| `VioWindow` | `Window` (GLFW) | `NullWindow` (no-op) |
+| `VioRenderer2D` | `Renderer2D` (NanoVG) | `NullRenderer2D` (no-op) |
+| `VioRenderer3D` | `OpenGLRenderer3D` / `VulkanRenderer3D` / `MetalRenderer3D` | `NullRenderer3D` (no-op) |
+| `VioTextureManager` | `TextureManager` (GL) | `NullTextureManager` (dummy) |
+| `VioAudioBackend` | `GLFWAudioBackend` | `null` (no audio) |
+| `VioInput` | `Input` (GLFW callbacks) | `Input` (no-op) |
 
 The `headless` flag in `EngineConfig` switches all backends automatically.
 
@@ -538,6 +562,38 @@ The `headless` flag in `EngineConfig` switches all backends automatically.
 - `NullTextureManager` — `load()` auto-creates dummy `Texture` objects with
   `glId: 0` and configurable width/height; `register(id, w, h)` pre-registers
   textures for tests that need specific dimensions
+
+---
+
+## Splash screen
+
+The engine displays a branded splash screen before `onInit` runs. It shows
+"Developed with" above the PHPolygon logo on a black background with fade-in/out.
+The active renderer backends are displayed below the logo in grey text
+(e.g. "Vio 2D · Vio 3D", "OpenGL 2D · Vulkan").
+
+### Configuration
+
+```php
+// Default: splash enabled, 2.5 seconds
+$engine = new Engine(new EngineConfig());
+
+// Skip splash (development)
+$engine = new Engine(new EngineConfig(skipSplash: true));
+
+// Custom duration
+$engine = new Engine(new EngineConfig(splashDuration: 1.5));
+```
+
+### Behaviour
+
+- Runs after renderer/font init, before `onInit` callback
+- Skipped in headless mode and when `skipSplash: true`
+- Logo loaded from `resources/branding/logo.png` (filesystem and PHAR)
+- Falls back to text-only rendering if logo file is missing
+- Splash texture is unloaded after display
+- Closing the window during splash exits cleanly
+- `buildRendererInfo()` returns the active backends as a human-readable string
 
 ---
 

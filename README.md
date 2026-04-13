@@ -16,11 +16,13 @@
 
 ---
 
-PHPolygon is a standalone game engine written entirely in PHP. It leverages
-[php-glfw](https://github.com/mario-deluna/php-glfw) for OpenGL 4.1 / NanoVG
-rendering and [php-vulkan](https://github.com/hmennen90/php-vulkan) for 3D
-graphics. The primary authoring tool is Claude Code — scenes, components, and
-game logic are generated and iterated on through AI-assisted workflows.
+PHPolygon is a standalone game engine written entirely in PHP. It uses
+[php-vio](https://github.com/hmennen90/php-vio) as its primary unified backend
+for window management, input, audio, and 2D/3D rendering. When php-vio is not
+available, it falls back to [php-glfw](https://github.com/mario-deluna/php-glfw)
+(OpenGL 4.1 / NanoVG) and [php-vulkan](https://github.com/hmennen90/php-vulkan)
+for 3D graphics. The primary authoring tool is Claude Code — scenes, components,
+and game logic are generated and iterated on through AI-assisted workflows.
 
 ## Features
 
@@ -56,7 +58,10 @@ game logic are generated and iterated on through AI-assisted workflows.
 - **Visual regression testing** — Playwright-style VRT with GD software renderer,
   YIQ pixel comparison, automatic snapshot management, diff image generation
 - **Math primitives** — Vec2, Vec3, Mat3, Rect as immutable value objects
-- **Rendering** — NanoVG 2D renderer, Camera2D, TextureManager, SpriteSheet
+- **Rendering** — Vio unified backend (primary), NanoVG 2D fallback, Vulkan/Metal/OpenGL 3D,
+  Camera2D, TextureManager, SpriteSheet
+- **Splash screen** — Engine-branded "Developed with PHPolygon" splash at startup
+  with fade animation, renderer info display, configurable duration, skippable
 
 ## Architecture
 
@@ -66,8 +71,10 @@ PHPolygon\
 ├── Scene\            Scene, SceneManager, SceneBuilder, Prefabs, Transpiler
 ├── Component\        Transform2D, SpriteRenderer, RigidBody2D, BoxCollider2D, ...
 ├── System\           Physics2DSystem, Renderer2DSystem, AudioSystem, InputMapSystem
-├── Rendering\        Renderer2D (NanoVG), NullRenderer2D, Camera2D, Texture, Color
-├── Runtime\          Window, NullWindow, GameLoop, Input, Clock
+├── Rendering\        VioRenderer2D, Renderer2D (NanoVG), VioRenderer3D, OpenGLRenderer3D,
+│                     VulkanRenderer3D, MetalRenderer3D, NullRenderer2D/3D, Camera2D,
+│                     VioTextureManager, TextureManager, Color
+├── Runtime\          VioWindow, Window (GLFW), NullWindow, GameLoop, VioInput, Input, Clock
 ├── Physics\          Collision2D, RaycastHit2D
 ├── Input\            InputMap, InputAction, InputBinding
 ├── Audio\            AudioManager, AudioChannel, AudioBackendInterface
@@ -89,16 +96,18 @@ PHPolygon\
   `#[Category]`) drives both serialization and editor UI generation.
 - **No cross-boundary logic** — Components own per-entity behavior, Systems
   own cross-entity logic. Never mix the two.
-- **Layered rendering** — `RenderContextInterface` base, `Renderer2D` for
-  NanoVG/OpenGL, future `Renderer3D` for Vulkan with command buffers.
+- **Layered rendering** — `RenderContextInterface` base, `Renderer2DInterface`
+  (Vio or NanoVG), `Renderer3DInterface` (Vio, Vulkan, Metal, OpenGL) with
+  `RenderCommandList` command buffers. Backend auto-detected at startup.
 
 ## Getting Started
 
 ### Requirements
 
 - PHP 8.2+
-- [php-glfw](https://github.com/mario-deluna/php-glfw) extension (OpenGL 4.1 + NanoVG)
-- [php-vulkan](https://github.com/hmennen90/php-vulkan) extension (Vulkan rendering)
+- [php-vio](https://github.com/hmennen90/php-vio) extension (primary: unified window, input, audio, 2D/3D rendering)
+- **Or** [php-glfw](https://github.com/mario-deluna/php-glfw) extension (fallback: OpenGL 4.1 + NanoVG)
+- [php-vulkan](https://github.com/hmennen90/php-vulkan) extension (optional: native Vulkan 3D backend)
 - Composer
 
 ### Installation
@@ -162,37 +171,8 @@ class MainMenu extends Scene
 
 ## Examples
 
-The `examples/` directory contains runnable demos:
-
-### Hello World — NanoVG 2D Engine
-
-<img src="examples/hello_world.gif" alt="Hello World" width="640">
-
-Movable entity with camera, grid background, HUD overlay. WASD controls.
-
-### OpenGL Triangle — Custom Shaders
-
-<img src="examples/opengl_triangle.gif" alt="OpenGL Triangle" width="640">
-
-Rotating RGB triangle with vertex/fragment shaders, pulsing brightness.
-
-### OpenGL 3D Cube — Phong Lighting
-
-<img src="examples/opengl_cube.gif" alt="OpenGL Cube" width="640">
-
-Phong-lit spinning cube with camera orbit (WASD), zoom (scroll), depth testing.
-
-### Vulkan Compute — GPU Plasma
-
-<img src="examples/vulkan_compute.gif" alt="Vulkan Compute" width="640">
-
-Compute shader generates animated plasma pattern, presented via swapchain.
-
-### Vulkan Triangle — 3D Graphics Pipeline
-
-<img src="examples/vulkan_triangle.gif" alt="Vulkan Triangle" width="640">
-
-Rotating 3D pyramid with perspective projection, push constants, swapchain presentation.
+Games are built in separate repositories and require `phpolygon/phpolygon` via
+Composer. See the [Getting Started](#getting-started) section for a minimal example.
 
 ## Build System
 
@@ -228,7 +208,8 @@ and tooling:
 ```php
 $engine = new Engine(new EngineConfig(headless: true));
 // All subsystems work: ECS, Scenes, Events, Audio, Locale, Saves
-// Window → NullWindow, Renderer → NullRenderer2D, Textures → NullTextureManager
+// Window → NullWindow, Renderer → NullRenderer2D/3D, Textures → NullTextureManager
+// Splash screen is automatically skipped in headless mode
 ```
 
 ## Visual Regression Testing
@@ -268,8 +249,9 @@ PHPOLYGON_UPDATE_SNAPSHOTS=1 vendor/bin/phpunit
 | 4 | Editor infrastructure — inspector, registry, commands, NativePHP desktop app | Done |
 | 5 | Engine services — localization, save system, audio manager, UI system | Done |
 | 6 | Build & test — build pipeline, headless mode, visual regression testing | Done |
-| 7 | First game — engine validation through real-world usage | Next |
-| 8 | Vulkan 3D — Renderer3D, command buffers, 3D pipeline | Planned |
+| 7 | 3D pipeline — OpenGL, Vulkan, Metal backends, RenderCommandList, shadows, instancing | Done |
+| 8 | php-vio — unified backend for window, input, audio, 2D/3D rendering | Done |
+| 9 | First game — engine validation through real-world usage | Next |
 
 ## Testing
 
