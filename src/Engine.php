@@ -154,6 +154,95 @@ class Engine
         Facade::setEngine($this);
     }
 
+    /**
+     * Create a fully initialized Engine for visual regression testing.
+     * Initializes window, renderer, and fonts — backend-agnostic (VIO or GLFW).
+     */
+    public static function initVrt(EngineConfig $config): self
+    {
+        $engine = new self($config);
+
+        $engine->window->initialize($engine->input);
+
+        if ($engine->useVio) {
+            $vioCtx = $engine->window->getContext();
+            $engine->renderer2D = new VioRenderer2D($vioCtx);
+        } else {
+            $engine->renderer2D = new Renderer2D($engine->window);
+        }
+
+        // Load engine fonts
+        $fontDir = $engine->resolveEngineFontDir();
+        if ($fontDir !== null && is_dir($fontDir)) {
+            $engine->renderer2D->loadFont('regular', $fontDir . '/Inter-Regular.ttf');
+            $engine->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
+            $engine->renderer2D->setFont('regular');
+
+            $cjkDir = $fontDir . '/noto-sans-cjk';
+            if (is_dir($cjkDir)) {
+                $engine->renderer2D->loadFont('noto-sans-sc', $cjkDir . '/NotoSansSC-Regular.otf');
+                $engine->renderer2D->loadFont('noto-sans-kr', $cjkDir . '/NotoSansKR-Regular.otf');
+                $engine->renderer2D->addFallbackFont('regular', 'noto-sans-sc');
+                $engine->renderer2D->addFallbackFont('regular', 'noto-sans-kr');
+                $engine->renderer2D->addFallbackFont('semibold', 'noto-sans-sc');
+                $engine->renderer2D->addFallbackFont('semibold', 'noto-sans-kr');
+            }
+        }
+
+        return $engine;
+    }
+
+    /**
+     * Capture the current framebuffer as a GdImage. Backend-agnostic.
+     */
+    public function captureFramebuffer(): \GdImage
+    {
+        $fbW = $this->window->getFramebufferWidth();
+        $fbH = $this->window->getFramebufferHeight();
+
+        if ($this->useVio) {
+            $vioCtx = $this->window->getContext();
+            $pixels = vio_read_pixels($vioCtx);
+            // vio_read_pixels returns window-size pixels, not framebuffer-size
+            $pixelCount = (int)(strlen($pixels) / 4);
+            $winW = $this->window->getWidth();
+            $winH = $this->window->getHeight();
+            $readW = ($pixelCount === $winW * $winH) ? $winW : $fbW;
+            $readH = ($pixelCount === $winW * $winH) ? $winH : $fbH;
+            $fullImg = imagecreatetruecolor($readW, $readH);
+            for ($y = 0; $y < $readH; $y++) {
+                for ($x = 0; $x < $readW; $x++) {
+                    $idx = ($y * $readW + $x) * 4;
+                    if ($idx + 2 >= strlen($pixels)) break 2;
+                    imagesetpixel($fullImg, $x, $y, imagecolorallocate($fullImg, ord($pixels[$idx]), ord($pixels[$idx + 1]), ord($pixels[$idx + 2])));
+                }
+            }
+            $fbW = $readW;
+            $fbH = $readH;
+        } else {
+            $size = $fbW * $fbH * 4;
+            $buf = new \GL\Buffer\UByteBuffer(array_fill(0, $size, 0));
+            glReadPixels(0, 0, $fbW, $fbH, GL_RGBA, GL_UNSIGNED_BYTE, $buf);
+            $fullImg = imagecreatetruecolor($fbW, $fbH);
+            for ($y = 0; $y < $fbH; $y++) {
+                for ($x = 0; $x < $fbW; $x++) {
+                    $idx = ((($fbH - 1 - $y) * $fbW) + $x) * 4;
+                    imagesetpixel($fullImg, $x, $y, imagecolorallocate($fullImg, $buf[$idx], $buf[$idx + 1], $buf[$idx + 2]));
+                }
+            }
+        }
+
+        $logicalW = $this->config->width;
+        $logicalH = $this->config->height;
+        if ($fbW !== $logicalW || $fbH !== $logicalH) {
+            $img = imagecreatetruecolor($logicalW, $logicalH);
+            imagecopyresampled($img, $fullImg, 0, 0, 0, 0, $logicalW, $logicalH, $fbW, $fbH);
+            return $img;
+        }
+
+        return $fullImg;
+    }
+
     public function onUpdate(callable $callback): self
     {
         $this->onUpdate = $callback;
@@ -233,6 +322,17 @@ class Engine
                 $this->renderer2D->loadFont('regular',  $fontDir . '/Inter-Regular.ttf');
                 $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
                 $this->renderer2D->setFont('regular');
+
+                // CJK fallback fonts
+                $cjkDir = $fontDir . '/noto-sans-cjk';
+                if (is_dir($cjkDir)) {
+                    $this->renderer2D->loadFont('noto-sans-sc', $cjkDir . '/NotoSansSC-Regular.otf');
+                    $this->renderer2D->loadFont('noto-sans-kr', $cjkDir . '/NotoSansKR-Regular.otf');
+                    $this->renderer2D->addFallbackFont('regular', 'noto-sans-sc');
+                    $this->renderer2D->addFallbackFont('regular', 'noto-sans-kr');
+                    $this->renderer2D->addFallbackFont('semibold', 'noto-sans-sc');
+                    $this->renderer2D->addFallbackFont('semibold', 'noto-sans-kr');
+                }
             }
         } elseif (!$this->headless && !$nativeBackend) {
             $this->renderer2D = new Renderer2D($this->window);
@@ -243,16 +343,15 @@ class Engine
                 $this->renderer2D->loadFont('semibold', $fontDir . '/Inter-SemiBold.ttf');
                 $this->renderer2D->setFont('regular');
 
-                // CJK fallback fonts (NanoVG-specific)
+                // CJK fallback fonts
                 $cjkDir = $fontDir . '/noto-sans-cjk';
                 if (is_dir($cjkDir)) {
-                    $vg = $this->renderer2D->getVGContext();
                     $this->renderer2D->loadFont('noto-sans-sc', $cjkDir . '/NotoSansSC-Regular.otf');
                     $this->renderer2D->loadFont('noto-sans-kr', $cjkDir . '/NotoSansKR-Regular.otf');
-                    $vg->addFallbackFont('regular', 'noto-sans-sc');
-                    $vg->addFallbackFont('regular', 'noto-sans-kr');
-                    $vg->addFallbackFont('semibold', 'noto-sans-sc');
-                    $vg->addFallbackFont('semibold', 'noto-sans-kr');
+                    $this->renderer2D->addFallbackFont('regular', 'noto-sans-sc');
+                    $this->renderer2D->addFallbackFont('regular', 'noto-sans-kr');
+                    $this->renderer2D->addFallbackFont('semibold', 'noto-sans-sc');
+                    $this->renderer2D->addFallbackFont('semibold', 'noto-sans-kr');
                 }
             }
         } elseif (!$this->headless && $nativeBackend) {
@@ -298,6 +397,9 @@ class Engine
 
                     if ($this->renderer3D !== null) {
                         $this->renderer3D->beginFrame();
+                    }
+                    if ($this->input instanceof \PHPolygon\Runtime\VioInput) {
+                        $this->input->snapshotScroll();
                     }
                     $this->renderer2D->beginFrame();
 
@@ -347,6 +449,9 @@ class Engine
 
                     if ($this->renderer3D !== null) {
                         $this->renderer3D->beginFrame();
+                    }
+                    if ($this->input instanceof \PHPolygon\Runtime\VioInput) {
+                        $this->input->snapshotScroll();
                     }
                     $this->renderer2D->beginFrame();
 

@@ -61,6 +61,9 @@ class UIContext
     /** Whether any widget was hovered this frame */
     private bool $anyHovered = false;
 
+    /** @var list<\Closure> Deferred overlay draws (dropdowns) — rendered last for correct z-order */
+    private array $deferredOverlays = [];
+
     /** Viewport offset for letterboxing — mouse coords are adjusted by this */
     private float $viewportOffsetX = 0.0;
     private float $viewportOffsetY = 0.0;
@@ -117,6 +120,8 @@ class UIContext
 
     /**
      * End a UI layout region. Restores parent layout state.
+     * When the outermost region ends, deferred overlays (dropdowns) are drawn
+     * so they always appear on top of all other widgets.
      */
     public function end(): void
     {
@@ -131,6 +136,7 @@ class UIContext
             // Propagate hover state to parent
             $this->anyHovered = $prev['hovered'] || $wasHovered;
         }
+
     }
 
     // ── Widgets ──────────────────────────────────────────────────
@@ -380,7 +386,7 @@ class UIContext
         if ($hovered && $this->input->isMouseButtonReleased(0)) {
             $this->focusedTextField = $id;
             $this->textFieldBuffer = $value;
-            $this->textFieldCursor = mb_strlen($value) + 1;
+            $this->textFieldCursor = mb_strlen($value);
             $focused = true;
         } elseif (!$hovered && $this->input->isMouseButtonReleased(0) && $focused) {
             // Click outside → unfocus
@@ -390,9 +396,11 @@ class UIContext
 
         // Process typed characters
         if ($focused) {
-            $chars = $this->input->getCharsTyped();
             foreach ($this->input->getCharsTyped() as $char) {
-                $this->textFieldBuffer .= array_pop($chars);
+                // Insert at cursor position
+                $this->textFieldBuffer = mb_substr($this->textFieldBuffer, 0, $this->textFieldCursor)
+                    . $char
+                    . mb_substr($this->textFieldBuffer, $this->textFieldCursor);
                 $this->textFieldCursor++;
             }
             // Backspace (GLFW_KEY_BACKSPACE = 259)
@@ -432,6 +440,24 @@ class UIContext
             $s->fontSize,
             $s->textColor,
         );
+
+        // Blinking cursor when focused
+        if ($focused) {
+            $blinkOn = fmod(\PHPolygon\Runtime\Clock::now() / 1_000_000_000, 1.0) < 0.5;
+            if ($blinkOn) {
+                $textBeforeCursor = mb_substr($value, 0, $this->textFieldCursor);
+                $metrics = $this->renderer->measureText($textBeforeCursor, $s->fontSize);
+                $cursorX = $fieldX + $s->padding + $metrics->width;
+                $cursorY1 = $fieldY + $s->padding;
+                $cursorY2 = $cursorY1 + $s->fontSize;
+                $this->renderer->drawLine(
+                    new Vec2($cursorX, $cursorY1),
+                    new Vec2($cursorX, $cursorY2),
+                    $s->accentColor,
+                    1.5,
+                );
+            }
+        }
 
         $this->advance($totalH);
         return $value;
@@ -483,7 +509,8 @@ class UIContext
         $arrow = $isOpen ? '▲' : '▼';
         $this->renderer->drawText($arrow, $fieldRect->right() - $s->fontSize - $s->padding, $fieldRect->y + $s->padding, $s->fontSize * 0.75, $s->textColor);
 
-        // Draw the open option list (overlay — does not affect layout cursor)
+        // Process input for the open option list (inline for responsiveness)
+        // but defer rendering so the overlay draws on top of all widgets.
         if ($isOpen && count($options) > 0) {
             $rowH = $h;
             $totalCount = count($options);
@@ -503,7 +530,7 @@ class UIContext
                 $this->anyHovered = true;
             }
 
-            // Mouse wheel scrolling — accept on button or list area
+            // Mouse wheel scrolling
             if ($scrollable && ($hovered || $listHovered)) {
                 $scrollY = $this->input->getScrollY();
                 if (abs($scrollY) > 0.001) {
@@ -513,44 +540,69 @@ class UIContext
                 }
             }
 
-            $this->renderer->drawRoundedRect($listRect->x, $listRect->y, $w, $listH, $s->borderRadius, $s->backgroundColor);
-            $this->renderer->drawRectOutline($listRect->x, $listRect->y, $w, $listH, $s->borderColor, $s->borderWidth);
-
+            // Per-item input (hover highlight state + click selection)
+            $hoveredItem = -1;
             for ($vi = 0; $vi < $visibleCount; $vi++) {
                 $i = $vi + $scrollOffset;
                 if ($i >= $totalCount) break;
-                $opt = $options[$i];
                 $optRect = new Rect($fieldRect->x, $listY + $vi * $rowH, $w, $rowH);
-                $optHovered = $this->isHovered($optRect);
-
-                if ($optHovered) {
+                if ($this->isHovered($optRect)) {
                     $this->anyHovered = true;
-                    $this->renderer->drawRoundedRect($optRect->x, $optRect->y, $w, $rowH, $s->borderRadius, $s->hoverColor);
+                    $hoveredItem = $vi;
                     if ($this->input->isMouseButtonReleased(0)) {
                         $selectedIndex = $i;
                         $this->openDropdown = '';
                         $isOpen = false;
                     }
-                } elseif ($i === $selectedIndex) {
-                    $this->renderer->drawRoundedRect($optRect->x, $optRect->y, $w, $rowH, $s->borderRadius, $s->accentColor->withAlpha(0.25));
                 }
-
-                $this->renderer->drawText($opt, $optRect->x + $s->padding, $optRect->y + $s->padding, $s->fontSize, $s->textColor);
             }
 
-            // Scrollbar indicator
-            if ($scrollable) {
-                $scrollbarW = 4.0;
-                $scrollbarX = $fieldRect->x + $w - $scrollbarW - 2.0;
-                $thumbH = max(20.0, $listH * ($visibleCount / (float)$totalCount));
-                $thumbY = $listY + ($listH - $thumbH) * ($scrollOffset / (float)$maxOffset);
-                $this->renderer->drawRoundedRect($scrollbarX, $thumbY, $scrollbarW, $thumbH, 2.0, $s->textColor->withAlpha(0.3));
-            }
-
-            // Click outside closes without changing selection
+            // Click outside closes
             if (!$hovered && !$listHovered && $this->input->isMouseButtonReleased(0)) {
                 $this->openDropdown = '';
             }
+
+            // Defer all rendering to after the outermost end() call
+            $drawScrollOffset = $scrollOffset;
+            $drawSelectedIndex = $selectedIndex;
+            $drawHoveredItem = $hoveredItem;
+            $this->deferredOverlays[] = function () use (
+                $s, $fieldRect, $w, $listY, $listH, $rowH,
+                $visibleCount, $totalCount, $scrollable,
+                $drawScrollOffset, $drawSelectedIndex, $drawHoveredItem,
+                $options, $maxOffset,
+            ) {
+                $overlayBg = new Color(
+                    max(0.0, $s->backgroundColor->r * 0.5),
+                    max(0.0, $s->backgroundColor->g * 0.5),
+                    max(0.0, $s->backgroundColor->b * 0.5),
+                    1.0,
+                );
+                $this->renderer->drawRoundedRect($fieldRect->x, $listY, $w, $listH, $s->borderRadius, $overlayBg);
+                $this->renderer->drawRectOutline($fieldRect->x, $listY, $w, $listH, $s->accentColor, $s->borderWidth);
+
+                for ($vi = 0; $vi < $visibleCount; $vi++) {
+                    $i = $vi + $drawScrollOffset;
+                    if ($i >= $totalCount) break;
+                    $optY = $listY + $vi * $rowH;
+
+                    if ($vi === $drawHoveredItem) {
+                        $this->renderer->drawRoundedRect($fieldRect->x, $optY, $w, $rowH, $s->borderRadius, $s->hoverColor);
+                    } elseif ($i === $drawSelectedIndex) {
+                        $this->renderer->drawRoundedRect($fieldRect->x, $optY, $w, $rowH, $s->borderRadius, $s->accentColor->withAlpha(0.25));
+                    }
+
+                    $this->renderer->drawText($options[$i], $fieldRect->x + $s->padding, $optY + $s->padding, $s->fontSize, $s->textColor);
+                }
+
+                if ($scrollable && $maxOffset > 0) {
+                    $scrollbarW = 4.0;
+                    $scrollbarX = $fieldRect->x + $w - $scrollbarW - 2.0;
+                    $thumbH = max(20.0, $listH * ($visibleCount / (float)$totalCount));
+                    $thumbY = $listY + ($listH - $thumbH) * ($drawScrollOffset / (float)$maxOffset);
+                    $this->renderer->drawRoundedRect($scrollbarX, $thumbY, $scrollbarW, $thumbH, 2.0, $s->textColor->withAlpha(0.3));
+                }
+            };
         }
 
         $this->advance($h);
@@ -642,6 +694,23 @@ class UIContext
         $this->cursorX += $s->padding;
         $this->cursorY += $titleH + $s->padding;
         $this->regionWidth = $width - $s->padding * 2;
+    }
+
+    /**
+     * Draw deferred overlays (open dropdown lists). Call once at the end
+     * of the frame, after all begin/end pairs, so overlays render on top.
+     */
+    public function flushOverlays(): void
+    {
+        if (count($this->deferredOverlays) === 0) {
+            return;
+        }
+        $this->renderer->setFont($this->style->fontName);
+        $overlays = $this->deferredOverlays;
+        $this->deferredOverlays = [];
+        foreach ($overlays as $draw) {
+            $draw();
+        }
     }
 
     /**

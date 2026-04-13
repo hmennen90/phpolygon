@@ -36,6 +36,23 @@ class VioInput implements InputInterface
     /** @var list<string> Characters typed this frame */
     private array $charBuffer = [];
 
+    /** Cached scroll deltas — snapshot taken before vio_begin resets them */
+    private float $cachedScrollX = 0.0;
+    private float $cachedScrollY = 0.0;
+
+    /**
+     * Snapshot scroll deltas from the C context. Must be called BEFORE
+     * renderer2D->beginFrame() (which calls vio_begin and resets scroll to 0).
+     */
+    public function snapshotScroll(): void
+    {
+        if ($this->ctx !== null) {
+            $scroll = vio_mouse_scroll($this->ctx);
+            $this->cachedScrollX = $scroll[0];
+            $this->cachedScrollY = $scroll[1];
+        }
+    }
+
     private bool $suppressed = false;
     private int $suppressFrames = 0;
     private float $suppressUntil = 0.0;
@@ -102,11 +119,7 @@ class VioInput implements InputInterface
         if ($this->ctx === null || $this->isSuppressed()) {
             return false;
         }
-        if ($this->mouseJustPressed[$button] ?? false) {
-            unset($this->mouseJustPressed[$button]);
-            return true;
-        }
-        return false;
+        return $this->mouseJustPressed[$button] ?? false;
     }
 
     public function isMouseButtonReleased(int $button): bool
@@ -114,11 +127,7 @@ class VioInput implements InputInterface
         if ($this->ctx === null) {
             return false;
         }
-        if ($this->mouseJustReleased[$button] ?? false) {
-            unset($this->mouseJustReleased[$button]);
-            return true;
-        }
-        return false;
+        return $this->mouseJustReleased[$button] ?? false;
     }
 
     public function getMousePosition(): Vec2
@@ -148,18 +157,12 @@ class VioInput implements InputInterface
 
     public function getScrollX(): float
     {
-        if ($this->ctx === null) {
-            return 0.0;
-        }
-        return vio_mouse_scroll($this->ctx)[0];
+        return $this->cachedScrollX;
     }
 
     public function getScrollY(): float
     {
-        if ($this->ctx === null) {
-            return 0.0;
-        }
-        return vio_mouse_scroll($this->ctx)[1];
+        return $this->cachedScrollY;
     }
 
     public function getCharsTyped(): array
@@ -197,10 +200,13 @@ class VioInput implements InputInterface
 
     public function endFrame(): void
     {
-        // Detect and accumulate mouse button edges. Unlike keys (which have a
-        // GLFW callback via vio_on_key), mouse buttons are polled. We compare
-        // current vs prev each render frame and ACCUMULATE edges so they survive
-        // until the next update tick consumes them.
+        // Clear previous frame's mouse edges, then detect new ones.
+        // Mouse button state is polled (not callback-based like keys), so edges
+        // are detected by comparing current vs prev. Edges are NOT consumed on
+        // read — all callers within a frame see the same state (required for
+        // immediate-mode UI where multiple widgets check the same button).
+        $this->mouseJustPressed = [];
+        $this->mouseJustReleased = [];
         if ($this->ctx !== null) {
             for ($i = 0; $i <= 7; $i++) {
                 $current = vio_mouse_button($this->ctx, $i);

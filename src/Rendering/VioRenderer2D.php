@@ -31,6 +31,9 @@ class VioRenderer2D implements Renderer2DInterface
     /** @var array<int, VioTexture> Texture glId/objectId -> VioTexture */
     private array $vioTextures = [];
 
+    /** @var array<string, list<string>> Base font name -> list of fallback font names */
+    private array $fallbackFonts = [];
+
     /**
      * State stack for saveState()/restoreState().
      * Each entry stores: [fontName, textAlign, globalAlpha]
@@ -156,27 +159,23 @@ class VioRenderer2D implements Renderer2DInterface
 
     public function drawText(string $text, float $x, float $y, float $size, Color $color): void
     {
-        $font = $this->resolveFont($size);
-        if ($font === null) {
+        $chain = $this->resolveFontChain($size);
+        if (empty($chain)) {
             return;
         }
 
-        // Apply text alignment by adjusting coordinates.
-        // vio_text renders from the BASELINE, so we must compensate.
-        $align = $this->textAlign;
-        $metrics = vio_text_measure($font, $text);
-        $tw = (float)$metrics['width'];
-        $th = (float)$metrics['height'];
+        $tm = $this->measureTextWithChain($chain, $text);
+        $tw = $tm->width;
+        $th = $tm->height;
         $ascender = $th * 0.65;
+        $align = $this->textAlign;
 
-        // Horizontal
         if ($align & TextAlign::CENTER) {
             $x -= $tw / 2.0;
         } elseif ($align & TextAlign::RIGHT) {
             $x -= $tw;
         }
 
-        // Vertical — convert from alignment anchor to baseline position
         if ($align & TextAlign::TOP) {
             $y += $ascender;
         } elseif ($align & TextAlign::MIDDLE) {
@@ -184,24 +183,68 @@ class VioRenderer2D implements Renderer2DInterface
         } elseif ($align & TextAlign::BOTTOM) {
             $y += $ascender - $th;
         }
-        // BASELINE: y is already the baseline, no adjustment
 
-        vio_text($this->ctx, $font, $text, $x, $y, ['color' => $this->colorToArgb($color), 'z' => $this->nextZ()]);
+        $this->drawTextWithChain($chain, $text, $x, $y, $this->colorToArgb($color), $this->nextZ());
     }
 
     public function drawTextCentered(string $text, float $cx, float $cy, float $size, Color $color): void
     {
-        $font = $this->resolveFont($size);
-        if ($font === null) {
+        $chain = $this->resolveFontChain($size);
+        if (empty($chain)) {
             return;
         }
-        $metrics = vio_text_measure($font, $text);
-        $th = (float)$metrics['height'];
+        $tm = $this->measureTextWithChain($chain, $text);
+        $th = $tm->height;
         $ascender = $th * 0.65;
-        $x = $cx - $metrics['width'] / 2.0;
-        // vio_text renders from baseline — offset to visual center
+        $x = $cx - $tm->width / 2.0;
         $y = $cy + $ascender - $th / 2.0;
-        vio_text($this->ctx, $font, $text, $x, $y, ['color' => $this->colorToArgb($color), 'z' => $this->nextZ()]);
+
+        $this->drawTextWithChain($chain, $text, $x, $y, $this->colorToArgb($color), $this->nextZ());
+    }
+
+    /**
+     * Render text using the font chain. Primary font renders first;
+     * fallback fonts only render characters the primary doesn't cover.
+     * @param list<\VioFont> $chain
+     */
+    private function drawTextWithChain(array $chain, string $text, float $x, float $y, int $argb, float $z): void
+    {
+        $primary = $chain[0];
+        vio_text($this->ctx, $primary, $text, $x, $y, ['color' => $argb, 'z' => $z]);
+
+        // If no fallbacks, done
+        if (count($chain) <= 1) {
+            return;
+        }
+
+        // Check if primary covers everything
+        $primaryW = (float)vio_text_measure($primary, $text)['width'];
+        $chainW = 0.0;
+        foreach ($chain as $font) {
+            $w = (float)vio_text_measure($font, $text)['width'];
+            if ($w > $chainW) { $chainW = $w; }
+        }
+        if ($primaryW >= $chainW - 0.01) {
+            return; // Primary covers all glyphs
+        }
+
+        // Build per-character font assignments: find chars primary can't render
+        $len = mb_strlen($text);
+        for ($i = 1; $i < count($chain); $i++) {
+            $fb = $chain[$i];
+            $fbText = '';
+            for ($c = 0; $c < $len; $c++) {
+                $ch = mb_substr($text, $c, 1);
+                $pw = (float)vio_text_measure($primary, $ch)['width'];
+                if ($pw > 0.001) {
+                    // Primary has this glyph — insert a space so fallback advances cursor
+                    $fbText .= ' ';
+                } else {
+                    $fbText .= $ch;
+                }
+            }
+            vio_text($this->ctx, $fb, $fbText, $x, $y, ['color' => $argb, 'z' => $z]);
+        }
     }
 
     public function drawTextBox(string $text, float $x, float $y, float $breakWidth, float $size, Color $color): void
@@ -305,13 +348,30 @@ class VioRenderer2D implements Renderer2DInterface
 
     public function measureText(string $text, float $size): TextMetrics
     {
-        $font = $this->resolveFont($size);
-        if ($font === null) {
-            // Estimate based on size if no font is loaded
-            return new TextMetrics(strlen($text) * $size * 0.6, $size);
+        $chain = $this->resolveFontChain($size);
+        if (empty($chain)) {
+            return new TextMetrics(mb_strlen($text) * $size * 0.6, $size);
         }
-        $metrics = vio_text_measure($font, $text);
-        return new TextMetrics((float)$metrics['width'], (float)$metrics['height']);
+        return $this->measureTextWithChain($chain, $text);
+    }
+
+    /**
+     * Measure text width using the font chain. Takes the max width across
+     * all fonts (each font contributes width for glyphs it has, skips missing).
+     * @param list<VioFont> $chain
+     */
+    private function measureTextWithChain(array $chain, string $text): TextMetrics
+    {
+        $maxW = 0.0;
+        $maxH = 0.0;
+        foreach ($chain as $font) {
+            $m = vio_text_measure($font, $text);
+            $w = (float)$m['width'];
+            $h = (float)$m['height'];
+            if ($w > $maxW) { $maxW = $w; }
+            if ($h > $maxH) { $maxH = $h; }
+        }
+        return new TextMetrics($maxW, $maxH);
     }
 
     public function measureTextBox(string $text, float $breakWidth, float $size): TextMetrics
@@ -351,9 +411,7 @@ class VioRenderer2D implements Renderer2DInterface
 
     public function addFallbackFont(string $baseFont, string $fallbackFont): void
     {
-        // VIO does not currently support fallback fonts at runtime.
-        // This is a no-op; CJK support must be handled by loading
-        // a combined font file for the VIO backend.
+        $this->fallbackFonts[$baseFont][] = $fallbackFont;
     }
 
     public function setGlobalAlpha(float $alpha): void
@@ -429,15 +487,20 @@ class VioRenderer2D implements Renderer2DInterface
 
     private function resolveFont(float $size): ?VioFont
     {
-        if ($this->currentFontName === '' || !isset($this->fontPaths[$this->currentFontName])) {
+        return $this->resolveFontByName($this->currentFontName, $size);
+    }
+
+    private function resolveFontByName(string $name, float $size): ?VioFont
+    {
+        if ($name === '' || !isset($this->fontPaths[$name])) {
             return null;
         }
 
         $roundedSize = (float)(int)$size;
-        $key = $this->currentFontName . ':' . (int)$roundedSize;
+        $key = $name . ':' . (int)$roundedSize;
 
         if (!isset($this->fontCache[$key])) {
-            $font = vio_font($this->ctx, $this->fontPaths[$this->currentFontName], $roundedSize);
+            $font = vio_font($this->ctx, $this->fontPaths[$name], $roundedSize);
             if ($font === false) {
                 return null;
             }
@@ -445,6 +508,27 @@ class VioRenderer2D implements Renderer2DInterface
         }
 
         return $this->fontCache[$key];
+    }
+
+    /**
+     * Get the primary font plus all registered fallback fonts for the current font.
+     * @return list<VioFont>
+     */
+    private function resolveFontChain(float $size): array
+    {
+        $primary = $this->resolveFont($size);
+        if ($primary === null) {
+            return [];
+        }
+        $chain = [$primary];
+        $fallbacks = $this->fallbackFonts[$this->currentFontName] ?? [];
+        foreach ($fallbacks as $fbName) {
+            $fb = $this->resolveFontByName($fbName, $size);
+            if ($fb !== null) {
+                $chain[] = $fb;
+            }
+        }
+        return $chain;
     }
 
     private function getVioTexture(Texture $texture): ?VioTexture
