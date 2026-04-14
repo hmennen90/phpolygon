@@ -709,13 +709,13 @@ class Engine
     {
         $parts = [];
         $parts[] = match (true) {
-            $this->renderer2D instanceof VioRenderer2D => 'Vio 2D',
+            $this->renderer2D instanceof VioRenderer2D => 'Vio 2D (' . ucfirst($this->getVioBackendName()) . ')',
             $this->renderer2D instanceof Renderer2D => 'OpenGL 2D',
             default => null,
         };
         if ($this->renderer3D !== null) {
             $parts[] = match (true) {
-                $this->renderer3D instanceof VioRenderer3D => 'Vio 3D',
+                $this->renderer3D instanceof VioRenderer3D => 'Vio 3D (' . ucfirst($this->getVioBackendName()) . ')',
                 $this->renderer3D instanceof VulkanRenderer3D => 'Vulkan',
                 $this->renderer3D instanceof MetalRenderer3D => 'Metal',
                 $this->renderer3D instanceof OpenGLRenderer3D => 'OpenGL 3D',
@@ -723,6 +723,14 @@ class Engine
             };
         }
         return implode(' · ', array_filter($parts));
+    }
+
+    private function getVioBackendName(): string
+    {
+        if ($this->window instanceof VioWindow && function_exists('vio_backend_name')) {
+            return vio_backend_name($this->window->getContext());
+        }
+        return 'unknown';
     }
 
     private function shutdown(): void
