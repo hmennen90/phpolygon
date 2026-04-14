@@ -41,7 +41,7 @@ class Window
         protected int $width,
         protected int $height,
         protected string $title,
-        private bool $vsync = true,
+        protected bool $vsync = true,
         private bool $resizable = true,
         private bool $noApi = false, // true for Vulkan/Metal — disables OpenGL context creation
     ) {}

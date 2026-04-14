@@ -32,7 +32,7 @@ class VioWindow extends Window
             'width' => $this->width,
             'height' => $this->height,
             'title' => $this->title,
-            'vsync' => true,
+            'vsync' => $this->vsync,
             'samples' => 4,
         ]);
 
