@@ -319,7 +319,7 @@ When php-vio is loaded, the engine uses these implementations:
 
 | Standard class | Vio replacement | Notes |
 |---|---|---|
-| `Window` (GLFW) | `VioWindow` | `vio_create()` backend |
+| `Window` (GLFW) | `VioWindow` | `vio_create('auto', ...)` — auto-selects best backend per platform |
 | `Input` (GLFW callbacks) | `VioInput` | Unified input from Vio context |
 | `Renderer2D` (NanoVG) | `VioRenderer2D` | `vio_rect()`, `vio_text()`, `vio_sprite()` etc. |
 | `Renderer3D` (OpenGL) | `VioRenderer3D` | 3D rendering through Vio context |
@@ -503,6 +503,49 @@ $ui->end();
 - `UIContext` must be called from `render()`, not `update()` (input state uses
   `mousePrev` snapshotted by `endFrame()`, which runs between update and render).
 
+### UIContext — dropdown overlays
+
+Dropdown option lists are rendered as deferred overlays via `flushOverlays()`.
+Call this once at the end of the frame, after all `begin()`/`end()` pairs:
+
+```php
+// After all UI rendering
+GameUI::$ctx->flushOverlays();
+```
+
+This ensures dropdown lists render on top of all other widgets regardless of
+draw order. Without it, widgets drawn after the dropdown occlude its option list.
+
+### UIContext — text fields
+
+Text fields support:
+- Blinking cursor (1Hz) at the insertion point
+- Character insertion at cursor position (not just append)
+- Arrow key navigation, backspace at cursor, delete forward
+
+### VioInput — non-consuming events
+
+`isMouseButtonPressed()` and `isMouseButtonReleased()` do **not** consume events.
+All callers within the same frame see the same state. This is required for
+immediate-mode UI where multiple widgets check the same button per frame.
+
+Scroll values are cached via `snapshotScroll()` before `vio_begin()` resets them.
+The Engine calls this automatically. `getScrollX()`/`getScrollY()` return cached values.
+
+### VioRenderer2D — fallback font chain
+
+Register fallback fonts for locales that need them (e.g. CJK):
+
+```php
+$r2d->addFallbackFont('inter-semibold', 'noto-sans-sc');
+$r2d->preloadFonts([15.0, 26.0]);  // pre-bake atlas to avoid stutter
+$r2d->clearFallbackFonts();         // when switching to a non-CJK locale
+```
+
+Games should only register CJK fallbacks when the active locale requires them.
+The primary font renders first; fallback fonts only render glyphs the primary
+doesn't cover. `measureText()` uses the full chain for width calculation.
+
 ---
 
 ## Window — mode switching (macOS notes)
@@ -570,7 +613,7 @@ The `headless` flag in `EngineConfig` switches all backends automatically.
 The engine displays a branded splash screen before `onInit` runs. It shows
 "Developed with" above the PHPolygon logo on a black background with fade-in/out.
 The active renderer backends are displayed below the logo in grey text
-(e.g. "Vio 2D · Vio 3D", "OpenGL 2D · Vulkan").
+(e.g. "Metal 2D · Metal 3D", "OpenGL 2D · Vulkan").
 
 ### Configuration
 
@@ -608,6 +651,21 @@ $engine = new Engine(new EngineConfig(splashDuration: 1.5));
 | `ComparisonResult` | Result object with `passes()`, tolerances, diff path |
 | `VisualTestCase` | PHPUnit trait — Playwright-style `assertScreenshot()` |
 | `NullTextureManager` | Headless texture stubs for scene rendering tests |
+
+### Backend-agnostic VRT
+
+```php
+$engine = Engine::initVrt(new EngineConfig(
+    title: 'VRT', width: 1280, height: 720, vsync: false,
+));
+// ... load fonts, render ...
+$img = $engine->captureFramebuffer();  // GdImage, works with VIO and GLFW
+```
+
+`initVrt()` creates a fully initialized Engine with window, renderer, and
+engine fonts. `captureFramebuffer()` returns a `GdImage` using `vio_read_pixels`
+(VIO) or `glReadPixels` (GLFW). Games should use a shared `renderScene()` method
+so VRT tests exercise the exact same code path as the live game.
 
 ### 3D scene testing
 
