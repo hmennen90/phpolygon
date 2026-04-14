@@ -10,11 +10,13 @@
  */
 
 namespace GL\Buffer {
+    interface BufferInterface {}
+
     /**
      * @implements \ArrayAccess<int, int>
      */
-    class UByteBuffer implements \ArrayAccess, \Countable {
-        /** @param list<int> $data */
+    class UByteBuffer implements \ArrayAccess, \Countable, BufferInterface {
+        /** @param array<int, int> $data */
         public function __construct(array $data) {}
         public function offsetExists(mixed $offset): bool {}
         public function offsetGet(mixed $offset): int {}
@@ -36,6 +38,7 @@ namespace {
      * @param positive-int $height
      */
     function glReadPixels(int $x, int $y, int $width, int $height, int $format, int $type, \GL\Buffer\UByteBuffer $data): void {}
+    function glTexImage2D(int $target, int $level, int $internalformat, int $width, int $height, int $border, int $format, int $type, \GL\Buffer\BufferInterface|null $data): void {}
 
     function glFinish(): void {}
 
