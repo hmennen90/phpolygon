@@ -199,10 +199,15 @@ class Engine
         $fbW = $this->window->getFramebufferWidth();
         $fbH = $this->window->getFramebufferHeight();
 
+        /** @var positive-int $safeFbW */
+        $safeFbW = max(1, $fbW);
+        /** @var positive-int $safeFbH */
+        $safeFbH = max(1, $fbH);
+
         if ($this->useVio && $this->window instanceof VioWindow) {
-            $fullImg = self::captureVio($this->window, $fbW, $fbH);
+            $fullImg = self::captureVio($this->window, $safeFbW, $safeFbH);
         } else {
-            $fullImg = self::captureGL(max(1, $fbW), max(1, $fbH));
+            $fullImg = self::captureGL($safeFbW, $safeFbH);
         }
 
         $logicalW = max(1, $this->config->width);
@@ -271,13 +276,10 @@ class Engine
         for ($y = 0; $y < $fbH; $y++) {
             for ($x = 0; $x < $fbW; $x++) {
                 $idx = ((($fbH - 1 - $y) * $fbW) + $x) * 4;
-                /** @var int $r */
-                $r = $buf[$idx];
-                /** @var int $g */
-                $g = $buf[$idx + 1];
-                /** @var int $b */
-                $b = $buf[$idx + 2];
-                $color = imagecolorallocate($img, min(255, $r), min(255, $g), min(255, $b));
+                $r = max(0, min(255, $buf[$idx]));
+                $g = max(0, min(255, $buf[$idx + 1]));
+                $b = max(0, min(255, $buf[$idx + 2]));
+                $color = imagecolorallocate($img, $r, $g, $b);
                 if ($color !== false) {
                     imagesetpixel($img, $x, $y, $color);
                 }

@@ -9,13 +9,41 @@
  * them without the extension present.
  */
 
+namespace GL\Buffer {
+    /**
+     * @implements \ArrayAccess<int, int>
+     */
+    class UByteBuffer implements \ArrayAccess, \Countable {
+        /** @param list<int> $data */
+        public function __construct(array $data) {}
+        public function offsetExists(mixed $offset): bool {}
+        public function offsetGet(mixed $offset): int {}
+        public function offsetSet(mixed $offset, mixed $value): void {}
+        public function offsetUnset(mixed $offset): void {}
+        public function count(): int {}
+    }
+}
+
 namespace {
     function glGenTextures(int $n, int &$textures): void {}
     function glGenFramebuffers(int $n, int &$framebuffers): void {}
     function glGenRenderbuffers(int $n, int &$renderbuffers): void {}
 
+    /**
+     * @param int<0, max> $x
+     * @param int<0, max> $y
+     * @param positive-int $width
+     * @param positive-int $height
+     */
+    function glReadPixels(int $x, int $y, int $width, int $height, int $format, int $type, \GL\Buffer\UByteBuffer $data): void {}
+
+    function glFinish(): void {}
+
     /** Returns the NSWindow pointer for a GLFW window (macOS only). */
     function glfwGetCocoaWindow(object $window): int {}
+
+    const GL_RGBA = 0x1908;
+    const GL_UNSIGNED_BYTE = 0x1401;
 }
 
 namespace GL\Math {
