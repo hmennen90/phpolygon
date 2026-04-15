@@ -639,12 +639,19 @@ class Engine
         $gray = new Color(0.5, 0.5, 0.5);
         $rendererInfo = $this->buildRendererInfo();
 
-        $startTime = microtime(true);
+        // Start the timer after the first frame is actually presented,
+        // so initialization delays (font loading, first drawable acquisition)
+        // don't eat into the visible splash duration.
+        $startTime = null;
 
         while (!$this->window->shouldClose()) {
-            $elapsed = microtime(true) - $startTime;
-            if ($elapsed >= $duration) {
-                break;
+            if ($startTime !== null) {
+                $elapsed = microtime(true) - $startTime;
+                if ($elapsed >= $duration) {
+                    break;
+                }
+            } else {
+                $elapsed = 0.0;
             }
 
             // Fade: in for first 0.4s, out for last 0.5s, full in between
@@ -700,6 +707,11 @@ class Engine
             $this->renderer2D->endFrame();
             $this->window->swapBuffers();
             $this->window->pollEvents();
+
+            // Start timer after first frame is visible on screen
+            if ($startTime === null) {
+                $startTime = microtime(true);
+            }
         }
 
         // Clean up splash texture
