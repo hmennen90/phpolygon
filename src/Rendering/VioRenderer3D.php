@@ -779,8 +779,9 @@ class VioRenderer3D implements Renderer3DInterface
         vio_set_uniform($this->ctx, 'u_model', $modelMatrix->toArray());
         vio_set_uniform($this->ctx, 'u_use_instancing', 0);
 
-        $nm = $this->computeNormalMatrix($modelMatrix);
-        vio_set_uniform($this->ctx, 'u_normal_matrix', $nm);
+        // Normal matrix: let shader compute from model matrix (avoids mat3 cbuffer packing issues on D3D)
+        // The shader's isZero fallback computes mat3(transpose(inverse(model))) * a_normal
+        vio_set_uniform($this->ctx, 'u_normal_matrix', [0.0,0.0,0.0, 0.0,0.0,0.0, 0.0,0.0,0.0]);
 
         $this->applyMaterial($material, $materialId);
 
