@@ -76,7 +76,7 @@ class VioRenderer3D implements Renderer3DInterface
     private $screenQuad = null;
     private float $bloomIntensity = 0.35;
     private float $bloomThreshold = 1.0;
-    private float $exposure = 2.0;
+    private float $exposure = 1.8;
 
     // Shadow map
     private ?VioRenderTarget $shadowTarget = null;
@@ -216,7 +216,7 @@ class VioRenderer3D implements Renderer3DInterface
         $hasShadowMap = $this->renderShadowPass($commandList, $dirLights);
 
         // Render scene to HDR target
-        $useHdr = ($this->hdrTarget !== null && $this->hdrTarget !== false);
+        $useHdr = false; // HDR/Bloom disabled — needs post-process pipeline debugging on D3D
 
         vio_viewport($this->ctx, 0, 0, $this->width, $this->height);
 
@@ -262,7 +262,7 @@ class VioRenderer3D implements Renderer3DInterface
             }
         }
 
-        // --- Pass 4: Skybox (rendered last, at max depth) ---
+        // --- Skybox (rendered last, at max depth via LEQUAL) ---
         if ($this->pendingSkyboxId !== null && $this->currentViewMatrix !== null && $this->currentProjectionMatrix !== null) {
             $this->renderSkybox($this->pendingSkyboxId);
             $this->pendingSkyboxId = null;
@@ -272,7 +272,6 @@ class VioRenderer3D implements Renderer3DInterface
         if ($useHdr) {
             vio_unbind_render_target($this->ctx);
             $sceneTex = vio_render_target_texture($this->hdrTarget);
-
             $hasBloom = ($this->bloomExtractTarget && $this->bloomPingTarget && $this->bloomPongTarget);
             $bloomTex = null;
 
@@ -320,6 +319,7 @@ class VioRenderer3D implements Renderer3DInterface
 
             // Tonemap + composite
             vio_viewport($this->ctx, 0, 0, $this->width, $this->height);
+
             $this->bindPostProcessPipeline('tonemap');
             vio_bind_texture($this->ctx, $sceneTex, 0);
             vio_set_uniform($this->ctx, 'u_scene', 0);
@@ -1020,8 +1020,9 @@ class VioRenderer3D implements Renderer3DInterface
 
         $ac = $state['ambientColor'];
         $ai = $state['ambientIntensity'];
-        vio_set_uniform($this->ctx, 'u_ambient_color', [$ac->r * $ai, $ac->g * $ai, $ac->b * $ai]);
-        vio_set_uniform($this->ctx, 'u_ambient_intensity', $ai);
+        $piScale = M_PI; // compensate Lambertian /π in Cook-Torrance BRDF
+        vio_set_uniform($this->ctx, 'u_ambient_color', [$ac->r * $ai * $piScale, $ac->g * $ai * $piScale, $ac->b * $ai * $piScale]);
+        vio_set_uniform($this->ctx, 'u_ambient_intensity', $ai * $piScale);
 
         $dirCount = min(count($state['dirLights']), 4);
         vio_set_uniform($this->ctx, 'u_dir_light_count', $dirCount);
@@ -1029,7 +1030,7 @@ class VioRenderer3D implements Renderer3DInterface
             $dl = $state['dirLights'][$i];
             vio_set_uniform($this->ctx, "u_dir_lights[{$i}].direction", [$dl->direction->x, $dl->direction->y, $dl->direction->z]);
             vio_set_uniform($this->ctx, "u_dir_lights[{$i}].color", [$dl->color->r, $dl->color->g, $dl->color->b]);
-            vio_set_uniform($this->ctx, "u_dir_lights[{$i}].intensity", $dl->intensity);
+            vio_set_uniform($this->ctx, "u_dir_lights[{$i}].intensity", $dl->intensity * $piScale);
         }
 
         $ptCount = min(count($state['pointLights']), 4);
@@ -1038,7 +1039,7 @@ class VioRenderer3D implements Renderer3DInterface
             $pl = $state['pointLights'][$i];
             vio_set_uniform($this->ctx, "u_point_lights[{$i}].position", [$pl->position->x, $pl->position->y, $pl->position->z]);
             vio_set_uniform($this->ctx, "u_point_lights[{$i}].color", [$pl->color->r, $pl->color->g, $pl->color->b]);
-            vio_set_uniform($this->ctx, "u_point_lights[{$i}].intensity", $pl->intensity);
+            vio_set_uniform($this->ctx, "u_point_lights[{$i}].intensity", $pl->intensity * $piScale);
             vio_set_uniform($this->ctx, "u_point_lights[{$i}].radius", $pl->radius);
         }
 
@@ -1292,6 +1293,35 @@ float calcShadow(vec4 lsp, vec3 N) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float distributionGGX(float NdotH, float a2) {
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * denom * denom);
+}
+
+float geometrySmith(float NdotV, float NdotL, float a2) {
+    float k = a2 * 0.5;
+    float ggxV = NdotV / (NdotV * (1.0 - k) + k);
+    float ggxL = NdotL / (NdotL * (1.0 - k) + k);
+    return ggxV * ggxL;
+}
+
+vec3 cookTorranceSpecular(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0) {
+    vec3 H = normalize(V + L);
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotV = max(dot(N, V), 0.001);
+    float NdotL = max(dot(N, L), 0.0);
+    float HdotV = max(dot(H, V), 0.0);
+
+    float a = roughness * roughness;
+    float a2 = a * a;
+
+    float D = distributionGGX(NdotH, a2);
+    float G = geometrySmith(NdotV, NdotL, a2);
+    vec3  F = fresnelSchlick(HdotV, F0);
+
+    return (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
 }
 
 vec4 outputColor(vec3 color, float alpha) {
@@ -1603,29 +1633,30 @@ void main() {
         roughness = mix(roughness, 0.8, snowMask); // snow is matte
     }
 
-    // ---- PBR Lighting ----
-    float shininess = exp2(10.0 * (1.0 - roughness) + 1.0);
+    // ---- PBR Lighting (Cook-Torrance GGX) ----
+    roughness = clamp(roughness, 0.04, 1.0);
     vec3 F0 = mix(vec3(0.04), albedo, u_metallic);
+    float NdotV = max(dot(N, V), 0.001);
     float shadow = calcShadow(v_lightSpacePos, N);
 
     float primaryIntensity = u_dir_light_count > 0 ? u_dir_lights[0].intensity : 0.0;
     float ambientShadow = mix(1.0, mix(0.5, 1.0, shadow), clamp(primaryIntensity, 0.0, 1.0));
-    vec3 color = u_ambient_color * u_ambient_intensity * albedo * (1.0 - u_metallic * 0.9) * ambientShadow;
+    vec3 F_ambient = fresnelSchlick(NdotV, F0);
+    vec3 kD_ambient = (1.0 - F_ambient) * (1.0 - u_metallic);
+    vec3 color = u_ambient_color * u_ambient_intensity * albedo * kD_ambient * ambientShadow;
 
     for (int dl = 0; dl < u_dir_light_count; dl++) {
         vec3 dL = normalize(-u_dir_lights[dl].direction);
-        vec3 dH = normalize(V + dL);
-        float rawNdotL = dot(N, dL);
-        float dNdotL = max(rawNdotL, 0.0);
-        float halfLambert = rawNdotL * 0.5 + 0.5;
-        halfLambert *= halfLambert;
-        float diffNdotL = mix(dNdotL, halfLambert, 0.4);
+        float dNdotL = max(dot(N, dL), 0.0);
         float dShadow = (dl == 0) ? shadow : 1.0;
 
-        color += albedo * u_dir_lights[dl].color * u_dir_lights[dl].intensity * diffNdotL * dShadow * (1.0 - u_metallic);
         if (dNdotL > 0.0) {
-            float spec = pow(max(dot(Nv, dH), 0.0), shininess) * (shininess + 2.0) / 8.0;
-            color += fresnelSchlick(max(dot(dH, V), 0.0), F0) * u_dir_lights[dl].color * u_dir_lights[dl].intensity * spec * dNdotL * dShadow;
+            vec3 spec = cookTorranceSpecular(N, V, dL, roughness, F0);
+            vec3 F = fresnelSchlick(max(dot(normalize(V + dL), V), 0.0), F0);
+            vec3 kD = (1.0 - F) * (1.0 - u_metallic);
+
+            vec3 radiance = u_dir_lights[dl].color * u_dir_lights[dl].intensity;
+            color += (kD * albedo / 3.14159265 + spec) * radiance * dNdotL * dShadow;
         }
     }
 
@@ -1638,10 +1669,12 @@ void main() {
         atten *= atten;
         float NdotPL = max(dot(N, Lp), 0.0);
         if (NdotPL > 0.0) {
-            vec3 lc = u_point_lights[i].color * u_point_lights[i].intensity * atten;
-            color += albedo * lc * NdotPL * (1.0 - u_metallic);
-            vec3 Hp = normalize(V + Lp);
-            color += fresnelSchlick(max(dot(Hp, V), 0.0), F0) * lc * pow(max(dot(Nv, Hp), 0.0), shininess) * (shininess + 2.0) / 8.0 * NdotPL;
+            vec3 spec = cookTorranceSpecular(N, V, Lp, roughness, F0);
+            vec3 F = fresnelSchlick(max(dot(normalize(V + Lp), V), 0.0), F0);
+            vec3 kD = (1.0 - F) * (1.0 - u_metallic);
+
+            vec3 radiance = u_point_lights[i].color * u_point_lights[i].intensity * atten;
+            color += (kD * albedo / 3.14159265 + spec) * radiance * NdotPL;
         }
     }
 
