@@ -215,8 +215,13 @@ class VioRenderer3D implements Renderer3DInterface
         // --- Shadow pass ---
         $hasShadowMap = $this->renderShadowPass($commandList, $dirLights);
 
-        // Render scene to HDR target
-        $useHdr = false; // HDR/Bloom disabled — needs post-process pipeline debugging on D3D
+        // HDR/Bloom disabled — D3D11 fullscreen quad draw produces no pixels (needs investigation)
+        $useHdr = false;
+
+        if ($useHdr) {
+            vio_bind_render_target($this->ctx, $this->hdrTarget);
+            vio_clear($this->ctx, 0, 0, 0, 1);
+        }
 
         vio_viewport($this->ctx, 0, 0, $this->width, $this->height);
 
@@ -321,11 +326,11 @@ class VioRenderer3D implements Renderer3DInterface
             vio_viewport($this->ctx, 0, 0, $this->width, $this->height);
 
             $this->bindPostProcessPipeline('tonemap');
-            vio_bind_texture($this->ctx, $sceneTex, 0);
             vio_set_uniform($this->ctx, 'u_scene', 0);
+            vio_bind_texture($this->ctx, $sceneTex, 0);
             if ($bloomTex) {
-                vio_bind_texture($this->ctx, $bloomTex, 1);
                 vio_set_uniform($this->ctx, 'u_bloom', 1);
+                vio_bind_texture($this->ctx, $bloomTex, 1);
                 vio_set_uniform($this->ctx, 'u_bloom_intensity', $this->bloomIntensity);
             } else {
                 vio_set_uniform($this->ctx, 'u_bloom_intensity', 0.0);
@@ -372,10 +377,9 @@ class VioRenderer3D implements Renderer3DInterface
                 -1, -1, 0,  0, 0,
                  1, -1, 0,  1, 0,
                  1,  1, 0,  1, 1,
-                -1, -1, 0,  0, 0,
-                 1,  1, 0,  1, 1,
                 -1,  1, 0,  0, 1,
             ],
+            'indices' => [0, 1, 2, 0, 2, 3],
             'layout' => [VIO_FLOAT3, VIO_FLOAT2],
         ]);
 
@@ -634,18 +638,29 @@ class VioRenderer3D implements Renderer3DInterface
 
     private function initSkyboxMesh(): void
     {
-        /** @var float[] $v Unit cube vertices (36 triangles, position only) */
         $v = [
-            -1.0,  1.0, -1.0,  -1.0, -1.0, -1.0,   1.0, -1.0, -1.0,   1.0, -1.0, -1.0,   1.0,  1.0, -1.0,  -1.0,  1.0, -1.0,
-            -1.0, -1.0,  1.0,  -1.0, -1.0, -1.0,  -1.0,  1.0, -1.0,  -1.0,  1.0, -1.0,  -1.0,  1.0,  1.0,  -1.0, -1.0,  1.0,
-             1.0, -1.0, -1.0,   1.0, -1.0,  1.0,   1.0,  1.0,  1.0,   1.0,  1.0,  1.0,   1.0,  1.0, -1.0,   1.0, -1.0, -1.0,
-            -1.0, -1.0,  1.0,  -1.0,  1.0,  1.0,   1.0,  1.0,  1.0,   1.0,  1.0,  1.0,   1.0, -1.0,  1.0,  -1.0, -1.0,  1.0,
-            -1.0,  1.0, -1.0,   1.0,  1.0, -1.0,   1.0,  1.0,  1.0,   1.0,  1.0,  1.0,  -1.0,  1.0,  1.0,  -1.0,  1.0, -1.0,
-            -1.0, -1.0, -1.0,  -1.0, -1.0,  1.0,   1.0, -1.0, -1.0,   1.0, -1.0, -1.0,  -1.0, -1.0,  1.0,   1.0, -1.0,  1.0,
+            -1.0, -1.0, -1.0,  // 0: left  bottom back
+             1.0, -1.0, -1.0,  // 1: right bottom back
+             1.0,  1.0, -1.0,  // 2: right top    back
+            -1.0,  1.0, -1.0,  // 3: left  top    back
+            -1.0, -1.0,  1.0,  // 4: left  bottom front
+             1.0, -1.0,  1.0,  // 5: right bottom front
+             1.0,  1.0,  1.0,  // 6: right top    front
+            -1.0,  1.0,  1.0,  // 7: left  top    front
+        ];
+
+        $indices = [
+            3,0,1, 1,2,3, // back  (-Z)
+            4,0,3, 3,7,4, // left  (-X)
+            1,5,6, 6,2,1, // right (+X)
+            4,7,6, 6,5,4, // front (+Z)
+            3,2,6, 6,7,3, // top   (+Y)
+            0,4,5, 5,1,0, // bottom(-Y)
         ];
 
         $mesh = vio_mesh($this->ctx, [
             'vertices' => $v,
+            'indices' => $indices,
             'layout' => [
                 ['location' => 0, 'components' => 3],
             ],

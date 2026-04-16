@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PHPolygon\System;
 
+use PHPolygon\Component\Camera3DComponent;
 use PHPolygon\Component\DayNightCycle;
 use PHPolygon\Component\DirectionalLight;
 use PHPolygon\Component\MeshRenderer;
@@ -14,9 +15,12 @@ use PHPolygon\Math\Vec3;
 use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\Command\SetAmbientLight;
 use PHPolygon\Rendering\Command\SetFog;
+use PHPolygon\Rendering\Command\SetSkybox;
 use PHPolygon\Rendering\Command\SetSkyColors;
+use PHPolygon\Rendering\CubemapRegistry;
 use PHPolygon\Rendering\Material;
 use PHPolygon\Rendering\MaterialRegistry;
+use PHPolygon\Rendering\ProceduralCubemap;
 use PHPolygon\Rendering\RenderCommandList;
 
 /**
@@ -218,14 +222,15 @@ class DayNightSystem extends AbstractSystem
         }
 
         // --- Move sun disc + glow ---
-        $sunRadius = 80.0;
+        // Inside the dome — dome layers are nearly transparent (1%)
+        $sunRadius = 300.0;
         $sunWorldX = -$sunDirX * $sunRadius;
         $sunWorldY = -$sunDirY * $sunRadius;
         $sunWorldZ = -$sunDirZ * $sunRadius;
         $sunVisible = $cycle->getSunElevation() > -10.0;
 
         // --- Moon direction (opposite to sun) ---
-        $moonRadius = 75.0;
+        $moonRadius = 280.0;
         $moonX = $sunDirX * $moonRadius;
         $moonY = $sunDirY * $moonRadius;
         $moonZ = $sunDirZ * $moonRadius;
@@ -250,18 +255,43 @@ class DayNightSystem extends AbstractSystem
 
         // Moon phase is rendered procedurally — no shadow sphere positioning needed
 
+        // Get camera position for dome/celestial tracking
+        $camPos = new Vec3(0.0, 3.0, 0.0);
+        foreach ($world->query(Camera3DComponent::class, Transform3D::class) as $entity) {
+            $camPos = $entity->get(Transform3D::class)->position;
+            break;
+        }
+
         foreach ($world->query(MeshRenderer::class, Transform3D::class) as $entity) {
             $mesh = $entity->get(MeshRenderer::class);
             $mat = $mesh->materialId;
 
-            // Sun layers (all follow same position)
+            // Sun disc + glow — outside dome, full orbit radius
             if ($mat === 'sun_disc' || $mat === 'sun_glow') {
-                $entity->get(Transform3D::class)->position = $sunPos;
+                $entity->get(Transform3D::class)->position = $sunVisible
+                    ? new Vec3($camPos->x + $sunWorldX, $sunWorldY, $camPos->z + $sunWorldZ)
+                    : new Vec3(0.0, -100.0, 0.0);
             }
 
-            // Moon layers (disc uses proc_mode 9 for phase rendering)
+            // Sun scatter layers — follow sun direction at shorter radius
+            if (str_starts_with($mat, 'sun_scatter_')) {
+                $scatterR = 350.0;
+                $entity->get(Transform3D::class)->position = $sunVisible
+                    ? new Vec3($camPos->x - $sunDirX * $scatterR, -$sunDirY * $scatterR, $camPos->z - $sunDirZ * $scatterR)
+                    : new Vec3(0.0, -100.0, 0.0);
+            }
+
+            // Moon layers — orbit around camera
             if ($mat === 'moon_disc' || $mat === 'moon_glow') {
-                $entity->get(Transform3D::class)->position = $moonPos;
+                $entity->get(Transform3D::class)->position = ($moonVisible && $moonY > 0)
+                    ? new Vec3($camPos->x + $moonX, $moonY, $camPos->z + $moonZ)
+                    : new Vec3(0.0, -100.0, 0.0);
+            }
+
+            // Sky dome layers — follow camera XZ, fixed Y
+            if ($mat === 'sky_zenith' || $mat === 'sky_strato' || $mat === 'sky_mid' || $mat === 'sky_horizon') {
+                $t3d = $entity->get(Transform3D::class);
+                $t3d->position = new Vec3($camPos->x, $t3d->position->y, $camPos->z);
             }
         }
 
@@ -330,18 +360,61 @@ class DayNightSystem extends AbstractSystem
         ));
 
         // --- Sky colors for water reflection ---
+        $skyColor = new Color($horizon['r'] * 0.5 + 0.15, $horizon['g'] * 0.5 + 0.2, $horizon['b'] * 0.5 + 0.3);
+        $horizonColor = new Color($horizon['r'], $horizon['g'], $horizon['b']);
         $this->commandList->add(new SetSkyColors(
-            skyColor: new Color($horizon['r'] * 0.5 + 0.15, $horizon['g'] * 0.5 + 0.2, $horizon['b'] * 0.5 + 0.3),
-            horizonColor: new Color($horizon['r'], $horizon['g'], $horizon['b']),
+            skyColor: $skyColor,
+            horizonColor: $horizonColor,
         ));
 
-        // --- Sky dome materials (update emission colors) ---
+        // --- Procedural cubemap skybox (generated once) ---
+        if (!CubemapRegistry::has('sky')) {
+            $zenithC = new Color(
+                self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t)['r'],
+                self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t)['g'],
+                self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t)['b'],
+            );
+            $midC = new Color(
+                $zenithC->r * 0.6 + $horizon['r'] * 0.4 + 0.05,
+                $zenithC->g * 0.6 + $horizon['g'] * 0.4 + 0.05,
+                $zenithC->b * 0.6 + $horizon['b'] * 0.4 + 0.05,
+            );
+            $data = ProceduralCubemap::generate(64, function (\PHPolygon\Math\Vec3 $dir) use ($zenithC, $midC, $horizonColor): Color {
+                $up = max(0.0, min(1.0, $dir->y));
+                if ($up > 0.5) {
+                    return $midC->lerp($zenithC, ($up - 0.5) * 2.0);
+                }
+                return $horizonColor->lerp($midC, $up * 2.0);
+            });
+            CubemapRegistry::registerProcedural('sky', $data);
+        }
+        $this->commandList->add(new SetSkybox('sky'));
+
+        // --- Sky dome materials (physically-based transparency) ---
+        // Each layer is thin individually — stacking at the horizon creates natural density.
         $zenith = self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t);
+        $sunH = $cycle->getSunHeight();
+
+        // Thin atmospheric layers — combined transmission ~75% so sun/moon shine through.
+        // Cubemap skybox behind provides base color; dome layers add tint.
+        $zenith = self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t);
+
         MaterialRegistry::register('sky_zenith', new Material(
             albedo: new Color(0, 0, 0),
             emission: new Color($zenith['r'], $zenith['g'], $zenith['b']),
+            alpha: 0.01,
         ));
-        // sky_mid: blend 60% zenith + 40% horizon, slightly brighter (original #4A90D9)
+
+        $horizonFactor = max(0.0, 1.0 - abs($cycle->getSunElevation()) / 25.0);
+        $stratoR = min(1.0, $zenith['r'] * 0.5 + $horizon['r'] * 0.5 + $horizonFactor * 0.2);
+        $stratoG = min(1.0, $zenith['g'] * 0.4 + $horizon['g'] * 0.6 + $horizonFactor * 0.1);
+        $stratoB = min(1.0, $zenith['b'] * 0.3 + $horizon['b'] * 0.7) * (1.0 - $horizonFactor * 0.3);
+        MaterialRegistry::register('sky_strato', new Material(
+            albedo: new Color(0, 0, 0),
+            emission: new Color($stratoR, $stratoG, $stratoB),
+            alpha: 0.01,
+        ));
+
         MaterialRegistry::register('sky_mid', new Material(
             albedo: new Color(0, 0, 0),
             emission: new Color(
@@ -349,68 +422,51 @@ class DayNightSystem extends AbstractSystem
                 $zenith['g'] * 0.6 + $horizon['g'] * 0.4 + 0.05,
                 $zenith['b'] * 0.6 + $horizon['b'] * 0.4 + 0.05,
             ),
+            alpha: 0.01,
         ));
+
         MaterialRegistry::register('sky_horizon', new Material(
             albedo: new Color(0, 0, 0),
             emission: new Color($horizon['r'], $horizon['g'], $horizon['b']),
+            alpha: 0.01,
         ));
 
-        // Stratosphere layer — Rayleigh scattering simulation
-        // Daytime: scatters blue light → pale blue-white (sky looks brighter at mid-altitudes)
-        // Sunset: more atmosphere to penetrate → filters blue out → orange/pink
-        // Night: dark, thin glow from starlight
-        $stratoSunH = $cycle->getSunHeight();
-        $stratoR = $zenith['r'] * 0.6 + $horizon['r'] * 0.4 + $stratoSunH * 0.15;
-        $stratoG = $zenith['g'] * 0.5 + $horizon['g'] * 0.5 + $stratoSunH * 0.10;
-        $stratoB = $zenith['b'] * 0.4 + $horizon['b'] * 0.6 + $stratoSunH * 0.05;
-        // At sunset/sunrise: shift toward warm (filter blue, keep red)
-        $horizonFactor = max(0.0, 1.0 - abs($cycle->getSunElevation()) / 25.0);
-        $stratoR += $horizonFactor * 0.3;
-        $stratoG += $horizonFactor * 0.1;
-        $stratoB *= (1.0 - $horizonFactor * 0.4); // blue is filtered
-        MaterialRegistry::register('sky_strato', new Material(
-            albedo: new Color(0, 0, 0),
-            emission: new Color(
-                min(1.0, $stratoR),
-                min(1.0, $stratoG),
-                min(1.0, $stratoB),
-            ),
-            alpha: 0.4 + $stratoSunH * 0.2, // more opaque during day, thinner at night
-        ));
-
-        // Sun-warm sky side: blends between sky-mid color (daytime) and warm glow (sunrise/sunset)
-        $sunWarmFactor = max(0.0, 1.0 - abs($cycle->getSunElevation()) / 30.0);
-        $midR = $zenith['r'] * 0.6 + $horizon['r'] * 0.4 + 0.05;
-        $midG = $zenith['g'] * 0.6 + $horizon['g'] * 0.4 + 0.05;
-        $midB = $zenith['b'] * 0.6 + $horizon['b'] * 0.4 + 0.05;
-        MaterialRegistry::register('sky_sun_warm', new Material(
-            albedo: new Color(0, 0, 0),
-            emission: new Color(
-                $midR * (1.0 - $sunWarmFactor) + $horizon['r'] * $sunWarmFactor,
-                $midG * (1.0 - $sunWarmFactor) + $horizon['g'] * $sunWarmFactor * 0.7,
-                $midB * (1.0 - $sunWarmFactor) + $horizon['b'] * $sunWarmFactor * 0.4,
-            ),
-        ));
-
-        // Sun materials (3 layers scale with brightness)
+        // Sun materials
         $discBright = $sunVisible ? max(0.0, $sunColor['intensity']) : 0.0;
         MaterialRegistry::register('sun_disc', new Material(
             albedo: new Color(0, 0, 0),
             emission: new Color(
-                min(1.0, $sunColor['r'] * $discBright + 0.3 * $discBright),
-                min(1.0, $sunColor['g'] * $discBright + 0.2 * $discBright),
-                min(1.0, $sunColor['b'] * $discBright + 0.4 * $discBright),
+                min(1.0, 0.95 * $discBright + 0.05),
+                min(1.0, 0.90 * $discBright + 0.05),
+                min(1.0, 0.70 * $discBright + 0.1),
             ),
         ));
+        // Corona — bright, warm, high alpha
         MaterialRegistry::register('sun_glow', new Material(
             albedo: new Color(0, 0, 0),
             emission: new Color(
-                min(1.0, $sunColor['r'] * $discBright * 0.9),
-                min(1.0, $sunColor['g'] * $discBright * 0.8),
-                min(1.0, $sunColor['b'] * $discBright * 0.5 + 0.15 * $discBright),
+                min(1.0, $sunColor['r'] * $discBright + 0.25),
+                min(1.0, $sunColor['g'] * $discBright * 0.9 + 0.15),
+                min(1.0, $sunColor['b'] * $discBright * 0.4 + 0.2),
             ),
-            alpha: 0.06,
+            alpha: 0.9 * $discBright,
         ));
+        // Mie scattering — 5 layers, bright core fading outward
+        $sunWarmFactor = max(0.0, 1.0 - abs($cycle->getSunElevation()) / 30.0);
+        $scatterAlphas = [0.45, 0.30, 0.18, 0.10, 0.05];
+        $scatterIntensities = [0.9, 0.7, 0.5, 0.35, 0.2];
+        for ($si = 0; $si < 5; $si++) {
+            $intensity = $scatterIntensities[$si];
+            MaterialRegistry::register("sun_scatter_{$si}", new Material(
+                albedo: new Color(0, 0, 0),
+                emission: new Color(
+                    min(1.0, $sunColor['r'] * $discBright * $intensity + $sunWarmFactor * $intensity * 0.5),
+                    min(1.0, $sunColor['g'] * $discBright * $intensity * 0.8 + $sunWarmFactor * $intensity * 0.3),
+                    min(1.0, $sunColor['b'] * $discBright * $intensity * 0.3 + $sunWarmFactor * $intensity * 0.1),
+                ),
+                alpha: $scatterAlphas[$si] * $discBright,
+            ));
+        }
 
         // Moon materials — must be significantly brighter than night sky for contrast
         MaterialRegistry::register('moon_disc', new Material(
