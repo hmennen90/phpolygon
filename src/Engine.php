@@ -818,24 +818,14 @@ class Engine
 
     private static function resolveLogPath(): string
     {
-        // PHAR / micro-SAPI: place next to binary
-        if (str_starts_with(__DIR__, 'phar://')) {
-            $binaryPath = PHP_BINARY;
-            $binaryDir = dirname($binaryPath);
-            // macOS .app bundle
-            if (str_contains($binaryDir, '.app/Contents/MacOS')) {
-                return dirname($binaryDir) . '/Resources/game.log';
-            }
-            return $binaryDir . '/game.log';
+        // Use PHPOLYGON_PATH_ROOT if available (set by PHAR stub and game bootstrap)
+        if (defined('PHPOLYGON_PATH_ROOT')) {
+            /** @var string $root */
+            $root = PHPOLYGON_PATH_ROOT;
+            return $root . DIRECTORY_SEPARATOR . 'game.log';
         }
 
-        // Development: project root via PHPOLYGON_PATH_RESOURCES or relative to src/
-        if (defined('PHPOLYGON_PATH_RESOURCES')) {
-            /** @var string $resDir */
-            $resDir = PHPOLYGON_PATH_RESOURCES;
-            return dirname($resDir) . '/game.log';
-        }
-
+        // Development: project root relative to src/
         return dirname(__DIR__) . '/game.log';
     }
 }
