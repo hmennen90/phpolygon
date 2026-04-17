@@ -248,6 +248,9 @@ STUB_START
         . "\n\$__engineLog('Running game...');"
         . "\n\$__engineLog('Loaded extensions: ' . implode(', ', get_loaded_extensions()));"
         . "\n\$__engineLog('Memory: ' . round(memory_get_usage(true) / 1024 / 1024, 1) . ' MB');"
+        . "\n\$__engineLog('Testing vio extension...');"
+        . "\nif (function_exists('vio_backends')) { \$__engineLog('vio_backends: ' . implode(', ', vio_backends())); }"
+        . "\n\$__engineLog('vio extension OK');"
         . "\ntry {"
         . $runCode
         . "\n} catch (\\Throwable \$__e) {"
