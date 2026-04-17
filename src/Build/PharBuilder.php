@@ -241,6 +241,8 @@ $__engineLog("Autoloader ready.");
 STUB_START
         . $additionalRequires
         . "\n\$__engineLog('Running game...');"
+        . "\n\$__engineLog('Loaded extensions: ' . implode(', ', get_loaded_extensions()));"
+        . "\n\$__engineLog('Memory: ' . round(memory_get_usage(true) / 1024 / 1024, 1) . ' MB');"
         . "\ntry {"
         . $runCode
         . "\n} catch (\\Throwable \$__e) {"
