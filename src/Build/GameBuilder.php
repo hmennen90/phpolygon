@@ -36,7 +36,7 @@ class GameBuilder
      *
      * @return array{outputPath: string, pharSize: int, binarySize: int, bundleSize: int}
      */
-    public function build(string $platform, string $outputDir, ?string $microSfxPath = null, ?string $arch = null, string $variant = 'base', string $buildType = 'full'): array
+    public function build(string $platform, string $outputDir, ?string $microSfxPath = null, ?string $arch = null, string $variant = 'base', string $buildType = 'full', string $phpVersion = '8.5'): array
     {
         $arch = $arch ?? StaticPhpResolver::detectArch();
 
@@ -90,7 +90,7 @@ class GameBuilder
 
             // Phase 4: Resolve static PHP binary
             $this->log('info', 'Resolving micro.sfx binary...');
-            $sfxPath = $this->staticPhpResolver->resolve($microSfxPath, $platform, $arch, $variant);
+            $sfxPath = $this->staticPhpResolver->resolve($microSfxPath, $platform, $arch, $variant, $phpVersion);
             $this->log('success', 'Found micro.sfx: ' . $sfxPath);
 
             // Phase 5: Combine executable

@@ -70,19 +70,20 @@ class StaticPhpResolverTest extends TestCase
     {
         $resolver = new StaticPhpResolver();
 
-        // Cache a fake binary first
-        $tempFile = tempnam(sys_get_temp_dir(), 'test-sfx-');
-        file_put_contents($tempFile, 'cached-binary');
-        $cachedPath = $resolver->cache($tempFile, 'test-os', 'test-arch');
-        @unlink($tempFile);
+        // Cache a fake binary in the versioned cache path
+        $home = getenv('HOME') ?: getenv('USERPROFILE') ?: sys_get_temp_dir();
+        $cacheDir = $home . '/.phpolygon/build-cache/test-os-test-arch-php8.5';
+        @mkdir($cacheDir, 0755, true);
+        $cachedPath = $cacheDir . '/micro.sfx';
+        file_put_contents($cachedPath, 'cached-binary');
 
         // Now resolve without explicit path — should find cached
-        $result = $resolver->resolve(null, 'test-os', 'test-arch');
+        $result = $resolver->resolve(null, 'test-os', 'test-arch', 'base', '8.5');
         $this->assertSame($cachedPath, $result);
 
         // Cleanup
         @unlink($cachedPath);
-        @rmdir(dirname($cachedPath));
+        @rmdir($cacheDir);
     }
 
     private function removeDir(string $dir): void

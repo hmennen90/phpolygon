@@ -31,7 +31,7 @@ class StaticPhpResolver
      * Resolve a micro.sfx binary path.
      * Priority: explicit path > download from GitHub Release (if newer) > cached
      */
-    public function resolve(?string $explicitPath, string $platform, string $arch, string $variant = 'base'): string
+    public function resolve(?string $explicitPath, string $platform, string $arch, string $variant = 'base', string $phpVersion = '8.5'): string
     {
         // 1. Explicit path from CLI
         if ($explicitPath !== null) {
@@ -41,11 +41,13 @@ class StaticPhpResolver
             return $explicitPath;
         }
 
-        $cacheKey = $variant !== 'base' ? "{$platform}-{$arch}-{$variant}" : "{$platform}-{$arch}";
+        $cacheKey = $variant !== 'base'
+            ? "{$platform}-{$arch}-{$variant}-php{$phpVersion}"
+            : "{$platform}-{$arch}-php{$phpVersion}";
         $cachedPath = $this->cacheDir . "/{$cacheKey}/micro.sfx";
 
         // 2. Check GitHub for a newer release, download if available
-        $downloaded = $this->downloadIfNewer($platform, $arch, $variant, $cachedPath);
+        $downloaded = $this->downloadIfNewer($platform, $arch, $variant, $cachedPath, $phpVersion);
         if ($downloaded !== null) {
             return $downloaded;
         }
@@ -61,7 +63,8 @@ class StaticPhpResolver
             "Options:\n" .
             "  1. Provide one with --micro-sfx <path>\n" .
             "  2. Trigger the 'Build Game micro.sfx' workflow in " . self::GITHUB_REPO . "\n" .
-            "  3. Cache a pre-built binary:\n" .
+            "  3. Try a different PHP version with --php-version 8.4 or 8.5\n" .
+            "  4. Cache a pre-built binary:\n" .
             "     mkdir -p ~/.phpolygon/build-cache/{$cacheKey}\n" .
             "     cp /path/to/micro.sfx ~/.phpolygon/build-cache/{$cacheKey}/micro.sfx"
         );
@@ -71,9 +74,9 @@ class StaticPhpResolver
      * Check if a newer release exists on GitHub than the cached binary.
      * Downloads and caches if newer; returns null if cache is up-to-date or offline.
      */
-    private function downloadIfNewer(string $platform, string $arch, string $variant, string $cachedPath): ?string
+    private function downloadIfNewer(string $platform, string $arch, string $variant, string $cachedPath, string $phpVersion): ?string
     {
-        $releaseUrl = $this->findLatestRuntimeRelease();
+        $releaseUrl = $this->findRuntimeRelease($phpVersion);
         if ($releaseUrl === null) {
             return null;
         }
@@ -98,7 +101,7 @@ class StaticPhpResolver
         }
 
         /** @var array<string, mixed> $release */
-        return $this->downloadFromReleaseData($release, $platform, $arch, $variant);
+        return $this->downloadFromReleaseData($release, $platform, $arch, $variant, $phpVersion);
     }
 
     /**
@@ -106,7 +109,7 @@ class StaticPhpResolver
      *
      * @param array<string, mixed> $release
      */
-    private function downloadFromReleaseData(array $release, string $platform, string $arch, string $variant): ?string
+    private function downloadFromReleaseData(array $release, string $platform, string $arch, string $variant, string $phpVersion = '8.5'): ?string
     {
         $osName = match (true) {
             $platform === 'macos' && $arch === 'arm64'   => 'macos-aarch64',
@@ -180,7 +183,9 @@ class StaticPhpResolver
             }
         }
 
-        $cacheKey = $variant !== 'base' ? "{$platform}-{$arch}-{$variant}" : "{$platform}-{$arch}";
+        $cacheKey = $variant !== 'base'
+            ? "{$platform}-{$arch}-{$variant}-php{$phpVersion}"
+            : "{$platform}-{$arch}-php{$phpVersion}";
         $cachedDir = $this->cacheDir . "/{$cacheKey}";
         if (!is_dir($cachedDir)) {
             mkdir($cachedDir, 0755, true);
@@ -201,37 +206,22 @@ class StaticPhpResolver
         return $cachedPath;
     }
 
-    private function findLatestRuntimeRelease(): ?string
+    private function findRuntimeRelease(string $phpVersion): ?string
     {
-        $url = "https://api.github.com/repos/" . self::GITHUB_REPO . "/releases";
+        $tag = "runtime-php{$phpVersion}";
+        $url = "https://api.github.com/repos/" . self::GITHUB_REPO . "/releases/tags/{$tag}";
         $json = $this->httpGet($url);
         if ($json === null) {
+            $this->log("No release found for tag {$tag}");
             return null;
         }
 
-        $releases = json_decode($json, true);
-        if (!is_array($releases)) {
+        $release = json_decode($json, true);
+        if (!is_array($release) || !isset($release['url'])) {
             return null;
         }
 
-        foreach ($releases as $release) {
-            if (!is_array($release) || !isset($release['tag_name'], $release['url'])) {
-                continue;
-            }
-            if (!empty($release['assets']) && is_array($release['assets'])) {
-                foreach ($release['assets'] as $asset) {
-                    if (!is_array($asset)) {
-                        continue;
-                    }
-                    $assetName = isset($asset['name']) && is_string($asset['name']) ? $asset['name'] : '';
-                    if (str_contains($assetName, 'micro')) {
-                        return is_string($release['url']) ? $release['url'] : null;
-                    }
-                }
-            }
-        }
-
-        return null;
+        return is_string($release['url']) ? $release['url'] : null;
     }
 
     private function removeDir(string $dir): void
