@@ -28,6 +28,9 @@ class VioWindow extends Window
 
     public function initialize(InputInterface $input): void
     {
+        \PHPolygon\Engine::log('VioWindow::initialize() backend=' . $this->backend . ' size=' . $this->width . 'x' . $this->height);
+        \PHPolygon\Engine::log('VioWindow: calling vio_create...');
+
         $ctx = vio_create($this->backend, [
             'width' => $this->width,
             'height' => $this->height,
@@ -36,13 +39,15 @@ class VioWindow extends Window
             'samples' => 4,
         ]);
 
+        \PHPolygon\Engine::log('VioWindow: vio_create returned ' . ($ctx === false ? 'false' : 'VioContext'));
+
         if ($ctx === false) {
-            throw new \RuntimeException('Failed to create VIO context');
+            throw new \RuntimeException('Failed to create VIO context with backend=' . $this->backend);
         }
 
         $this->ctx = $ctx;
         $this->initialized = true;
-        \PHPolygon\Engine::log('VioWindow: created with backend=' . $this->backend . ', actual=' . vio_backend_name($ctx));
+        \PHPolygon\Engine::log('VioWindow: actual backend=' . vio_backend_name($ctx));
 
         if ($input instanceof VioInput) {
             $input->setContext($ctx);
