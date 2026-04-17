@@ -76,6 +76,10 @@ class VioRenderer2D implements Renderer2DInterface
         $this->width = $size[0];
         $this->height = $size[1];
 
+        // Set viewport to framebuffer size (required for D3D11/D3D12 on Windows)
+        $fb = vio_framebuffer_size($this->ctx);
+        vio_viewport($this->ctx, 0, 0, $fb[0], $fb[1]);
+
         $this->zCounter = 0.0;
 
         vio_clear($this->ctx, 0.0, 0.0, 0.0, 1.0);
