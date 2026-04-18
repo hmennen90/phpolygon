@@ -79,6 +79,10 @@ class Engine
     /** @var callable|null */
     private $onInit = null;
 
+    /** Splash screen loading progress (0.0-1.0) and status label. */
+    private float $splashProgress = 0.0;
+    private string $splashLabel = '';
+
     public function __construct(
         private readonly EngineConfig $config = new EngineConfig(),
     ) {
@@ -310,6 +314,20 @@ class Engine
     {
         $this->onInit = $callback;
         return $this;
+    }
+
+    /**
+     * Update the splash screen progress bar during init.
+     * Call from the onInit callback to show loading progress.
+     *
+     * @param float  $progress  0.0 to 1.0
+     * @param string $label     Status text (e.g. "Loading fonts...")
+     */
+    public function setSplashProgress(float $progress, string $label = ''): void
+    {
+        $this->splashProgress = max(0.0, min(1.0, $progress));
+        $this->splashLabel = $label;
+        $this->renderSplashFrame();
     }
 
     public function run(): void
@@ -656,41 +674,45 @@ class Engine
      */
     private function showSplashScreen(?callable $initFn = null): void
     {
-        $w = $this->renderer2D->getWidth();
-        $h = $this->renderer2D->getHeight();
-        $black = new Color(0.0, 0.0, 0.0);
-        $white = new Color(1.0, 1.0, 1.0);
         $duration = $this->config->splashDuration;
 
         // Try to load the engine logo
-        $logo = null;
         $logoPath = __DIR__ . '/../resources/branding/logo.png';
         if (!str_starts_with($logoPath, 'phar://') && file_exists($logoPath)) {
-            $logo = $this->textures->load('_engine_splash_logo', $logoPath);
+            $this->splashLogo = $this->textures->load('_engine_splash_logo', $logoPath);
         } elseif (defined('PHPOLYGON_PATH_RESOURCES')) {
             /** @var string $resDir */
             $resDir = PHPOLYGON_PATH_RESOURCES;
             $pharLogo = $resDir . DIRECTORY_SEPARATOR . 'branding' . DIRECTORY_SEPARATOR . 'logo.png';
             if (file_exists($pharLogo)) {
-                $logo = $this->textures->load('_engine_splash_logo', $pharLogo);
+                $this->splashLogo = $this->textures->load('_engine_splash_logo', $pharLogo);
             }
         }
 
-        $gray = new Color(0.5, 0.5, 0.5);
-        $rendererInfo = $this->buildRendererInfo();
+        $this->splashRendererInfo = $this->buildRendererInfo();
+
+        // Engine init phase: show "Init Engine" progress
+        $this->splashProgress = 0.5;
+        $this->splashLabel = 'Init Engine';
 
         // Start the timer after the first frame is actually presented,
         // so initialization delays (font loading, first drawable acquisition)
         // don't eat into the visible splash duration.
         $startTime = null;
         $initDone = ($initFn === null);
+        $this->splashFadeAlpha = 1.0;
 
         while (!$this->window->shouldClose()) {
             if ($startTime !== null) {
                 // Run game init after the first splash frame is visible
-                if (!$initDone) {
+                if (!$initDone && $initFn !== null) {
                     self::log('Running onInit during splash...');
+                    $this->splashProgress = 0.5;
+                    $this->splashLabel = 'Init Game';
+                    $this->renderSplashFrame();
                     $initFn($this);
+                    $this->splashProgress = 1.0;
+                    $this->splashLabel = '';
                     self::log('onInit done');
                     $initDone = true;
                     // Reset timer so the full splash duration plays after init
@@ -714,50 +736,9 @@ class Engine
             } elseif ($elapsed > $duration - $fadeOut) {
                 $alpha = ($duration - $elapsed) / $fadeOut;
             }
-            $alpha = max(0.0, min(1.0, $alpha));
+            $this->splashFadeAlpha = max(0.0, min(1.0, $alpha));
 
-            $this->renderer2D->beginFrame();
-            $this->renderer2D->clear($black);
-            $this->renderer2D->setGlobalAlpha((float) $alpha);
-
-            if ($logo !== null) {
-                // Scale logo to fit ~60% of window width, maintain aspect ratio
-                $maxW = $w * 0.6;
-                $scale = $maxW / $logo->width;
-                $logoW = $logo->width * $scale;
-                $logoH = $logo->height * $scale;
-                $logoX = ($w - $logoW) / 2;
-                $logoY = ($h - $logoH) / 2;
-
-                $this->renderer2D->drawSprite($logo, null, (float) $logoX, (float) $logoY, (float) $logoW, (float) $logoH);
-
-                // "Developed with" above the logo
-                $this->renderer2D->setFont('regular');
-                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::BOTTOM);
-                $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($logoY - 12), 18.0, $white);
-
-                // Renderer info below the logo
-                if ($rendererInfo !== '') {
-                    $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::TOP);
-                    $this->renderer2D->drawText($rendererInfo, (float) ($w / 2), (float) ($logoY + $logoH + 16), 14.0, $gray);
-                }
-            } else {
-                // Text-only fallback
-                $this->renderer2D->setFont('regular');
-                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::MIDDLE);
-                $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($h / 2 - 30), 18.0, $white);
-                $this->renderer2D->drawText('PHPolygon', (float) ($w / 2), (float) ($h / 2 + 20), 42.0, $white);
-
-                if ($rendererInfo !== '') {
-                    $this->renderer2D->drawText($rendererInfo, (float) ($w / 2), (float) ($h / 2 + 60), 14.0, $gray);
-                }
-            }
-
-            $this->renderer2D->setGlobalAlpha(1.0);
-            $this->renderer2D->setTextAlign(TextAlign::LEFT | TextAlign::TOP);
-            $this->renderer2D->endFrame();
-            $this->window->swapBuffers();
-            $this->window->pollEvents();
+            $this->renderSplashFrame();
 
             // Start timer after first frame is visible on screen
             if ($startTime === null) {
@@ -765,8 +746,90 @@ class Engine
             }
         }
 
-        // Clean up splash texture
+        // Clean up
         $this->textures->unload('_engine_splash_logo');
+        $this->splashLogo = null;
+        $this->splashRendererInfo = '';
+    }
+
+    /** @var \PHPolygon\Rendering\Texture|null */
+    private $splashLogo = null;
+    private string $splashRendererInfo = '';
+    private float $splashFadeAlpha = 1.0;
+
+    /**
+     * Render a single splash screen frame. Called from the splash loop
+     * and from setSplashProgress() during init.
+     */
+    private function renderSplashFrame(): void
+    {
+        $w = $this->renderer2D->getWidth();
+        $h = $this->renderer2D->getHeight();
+        $black = new Color(0.0, 0.0, 0.0);
+        $white = new Color(1.0, 1.0, 1.0);
+        $gray = new Color(0.5, 0.5, 0.5);
+
+        $this->renderer2D->beginFrame();
+        $this->renderer2D->clear($black);
+        $this->renderer2D->setGlobalAlpha($this->splashFadeAlpha);
+
+        $barY = (float) ($h - 60);
+
+        if ($this->splashLogo !== null) {
+            $maxW = $w * 0.6;
+            $scale = $maxW / $this->splashLogo->width;
+            $logoW = $this->splashLogo->width * $scale;
+            $logoH = $this->splashLogo->height * $scale;
+            $logoX = ($w - $logoW) / 2;
+            $logoY = ($h - $logoH) / 2 - 30;
+
+            $this->renderer2D->drawSprite($this->splashLogo, null, (float) $logoX, (float) $logoY, (float) $logoW, (float) $logoH);
+
+            $this->renderer2D->setFont('regular');
+            $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::BOTTOM);
+            $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($logoY - 12), 18.0, $white);
+
+            if ($this->splashRendererInfo !== '') {
+                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::TOP);
+                $this->renderer2D->drawText($this->splashRendererInfo, (float) ($w / 2), (float) ($logoY + $logoH + 16), 14.0, $gray);
+            }
+        } else {
+            $this->renderer2D->setFont('regular');
+            $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::MIDDLE);
+            $this->renderer2D->drawText('Developed with', (float) ($w / 2), (float) ($h / 2 - 30), 18.0, $white);
+            $this->renderer2D->drawText('PHPolygon', (float) ($w / 2), (float) ($h / 2 + 20), 42.0, $white);
+
+            if ($this->splashRendererInfo !== '') {
+                $this->renderer2D->drawText($this->splashRendererInfo, (float) ($w / 2), (float) ($h / 2 + 60), 14.0, $gray);
+            }
+        }
+
+        // Progress bar and label
+        if ($this->splashProgress > 0.0 || $this->splashLabel !== '') {
+            $barW = 300.0;
+            $barH = 4.0;
+            $barX = (float) (($w - $barW) / 2);
+
+            // Bar background
+            $this->renderer2D->drawRect($barX, $barY, $barW, $barH, new Color(0.2, 0.2, 0.2));
+            // Bar fill
+            if ($this->splashProgress > 0.0) {
+                $this->renderer2D->drawRect($barX, $barY, (float) ($barW * $this->splashProgress), $barH, $white);
+            }
+
+            // Label below bar
+            if ($this->splashLabel !== '') {
+                $this->renderer2D->setFont('regular');
+                $this->renderer2D->setTextAlign(TextAlign::CENTER | TextAlign::TOP);
+                $this->renderer2D->drawText($this->splashLabel, (float) ($w / 2), $barY + $barH + 8, 13.0, $gray);
+            }
+        }
+
+        $this->renderer2D->setGlobalAlpha(1.0);
+        $this->renderer2D->setTextAlign(TextAlign::LEFT | TextAlign::TOP);
+        $this->renderer2D->endFrame();
+        $this->window->swapBuffers();
+        $this->window->pollEvents();
     }
 
     public function buildRendererInfo(): string
