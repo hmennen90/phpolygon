@@ -27,6 +27,9 @@ uniform float u_wave_phase;
 out vec3 v_normal;
 out vec3 v_worldPos;
 out vec2 v_uv;
+out vec3 v_localPos;
+out vec3 v_localNormal;
+out vec3 v_objectScale;
 
 void main() {
     // Select model matrix: per-instance attribute or uniform
@@ -51,6 +54,9 @@ void main() {
 
     vec4 worldPos = model * vec4(pos, 1.0);
     v_worldPos = worldPos.xyz;
+    v_localPos = pos;
+    v_localNormal = a_normal;
+    v_objectScale = vec3(length(model[0].xyz), length(model[1].xyz), length(model[2].xyz));
 
     // Normal matrix — compute from model matrix for instanced draws
     if (u_use_instancing == 1) {

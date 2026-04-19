@@ -3,6 +3,9 @@
 in vec3 v_normal;
 in vec3 v_worldPos;
 in vec2 v_uv;
+in vec3 v_localPos;
+in vec3 v_localNormal;
+in vec3 v_objectScale;
 
 uniform vec3 u_ambient_color;
 uniform float u_ambient_intensity;
@@ -413,14 +416,16 @@ vec3 computeRock(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
 // ================================================================
 
 vec3 computePalmTrunk(vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
-    // Bark rings — horizontal bands around the trunk
-    float ringFreq = 12.0;
-    float ring = sin(worldPos.y * ringFreq) * 0.5 + 0.5;
+    // Rings and fibers are locked to the cylinder's local UV so scars stay
+    // perpendicular to the trunk when it leans/curves, and the fiber pattern
+    // doesn't slide across the surface when the trunk sways.
+    //   v_uv.x = angular (0..1 around trunk)
+    //   v_uv.y = height along segment (0..1)
+    float ring = sin(v_uv.y * 6.2831 * 1.2) * 0.5 + 0.5;
     ring = smoothstep(0.3, 0.7, ring);
 
-    // Fiber texture — vertical streaks
-    float fiber = noise(vec2(worldPos.x * 20.0 + worldPos.z * 20.0, worldPos.y * 3.0));
-    float fiberFine = noise(vec2(worldPos.x * 50.0 + worldPos.z * 50.0, worldPos.y * 8.0));
+    float fiber = noise(vec2(v_uv.x * 20.0, v_uv.y * 4.0));
+    float fiberFine = noise(vec2(v_uv.x * 50.0, v_uv.y * 10.0));
 
     // Base bark color with warm brown variation
     vec3 darkBark  = baseAlbedo * 0.65;
@@ -446,20 +451,29 @@ vec3 computePalmTrunk(vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
 // ================================================================
 
 vec3 computePalmLeaf(vec3 worldPos, vec3 N, vec3 V, vec3 L, vec3 baseAlbedo, out float roughOut) {
-    // Leaf vein pattern — runs along the frond length
-    float vein = abs(sin(worldPos.x * 30.0 + worldPos.z * 30.0));
+    // PalmFrondMesh UV layout:
+    //   v_uv.y = distance along frond (0 base → 1 tip)
+    //   v_uv.x = sideways from the spine (0.5 centre, ±0.5 leaflet tips)
+    // UV-based patterns rotate with the frond when it sways.
+    float sideways = (v_uv.x - 0.5) * 2.0;
+
+    // Veins run outward from the spine, along the leaflet length.
+    float vein = abs(sin(sideways * 18.0));
     vein = smoothstep(0.0, 0.15, vein);
 
-    // Base green with variation
-    float n = fbm(worldPos.xz * 8.0, 3);
+    float n = fbm(v_uv * 8.0, 3);
     vec3 leafColor = baseAlbedo * (0.8 + n * 0.4);
 
-    // Central vein is lighter
     leafColor = mix(leafColor * 1.3, leafColor, vein);
 
-    // Tip browning — leaves get yellow/brown at edges
-    float edgeNoise = noise(worldPos.xz * 12.0);
-    leafColor = mix(leafColor, vec3(0.4, 0.35, 0.15), edgeNoise * 0.15);
+    // Age gradient: young green at the base, warmer yellow-brown at the tip.
+    float age = smoothstep(0.6, 1.0, v_uv.y);
+    leafColor = mix(leafColor, leafColor * vec3(0.55, 0.45, 0.18) * 1.4, age * 0.35);
+
+    // Edge browning concentrated near leaflet outer edges.
+    float edgeNoise = noise(v_uv * 12.0);
+    float edgeMask = smoothstep(0.6, 1.0, abs(sideways));
+    leafColor = mix(leafColor, vec3(0.4, 0.35, 0.15), edgeMask * edgeNoise * 0.25);
 
     // Translucency — light shining through leaf
     float translucency = max(dot(-N, L), 0.0);
@@ -479,12 +493,29 @@ vec3 computePalmLeaf(vec3 worldPos, vec3 N, vec3 V, vec3 L, vec3 baseAlbedo, out
 // ================================================================
 
 vec3 computeWoodPlanks(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
-    // Use world Y for horizontal planks, world XZ for grain direction
-    // Plank spacing — each plank ~0.15 units tall
-    float plankScale = 6.5;
-    float plankY = worldPos.y * plankScale;
-    float plankIndex = floor(plankY);
-    float withinPlank = fract(plankY);
+    // Plank orientation follows the face's local normal so planks rotate
+    // with the mesh and adapt to walls, floors and ceilings automatically.
+    // Local-space coordinates are scaled back to world distance via
+    // v_objectScale so density stays consistent across differently scaled
+    // entities (wall, floor, door panel).
+    vec3 scaledLocal = v_localPos * v_objectScale;
+    vec3 absN = abs(v_localNormal);
+
+    float plankCoord;
+    float grainCoord;
+    if (absN.y > absN.x && absN.y > absN.z) {
+        plankCoord = scaledLocal.z * 6.5;
+        grainCoord = scaledLocal.x * 8.0;
+    } else if (absN.x >= absN.z) {
+        plankCoord = scaledLocal.y * 6.5;
+        grainCoord = scaledLocal.z * 8.0;
+    } else {
+        plankCoord = scaledLocal.y * 6.5;
+        grainCoord = scaledLocal.x * 8.0;
+    }
+
+    float plankIndex = floor(plankCoord);
+    float withinPlank = fract(plankCoord);
 
     // Gap between planks — dark thin line
     float gap = smoothstep(0.0, 0.03, withinPlank) * smoothstep(1.0, 0.97, withinPlank);
@@ -498,24 +529,24 @@ vec3 computeWoodPlanks(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOu
     woodColor *= 0.8 + plankHash * 0.4; // brightness variation
     woodColor = mix(woodColor, woodColor * vec3(1.05, 0.95, 0.85), plankHash2 * 0.3); // hue shift
 
-    // Wood grain — runs horizontally along the plank
-    float grainCoord = worldPos.x * 8.0 + worldPos.z * 8.0 + plankHash * 20.0;
-    float grain = sin(grainCoord + noise(vec2(grainCoord * 0.5, plankIndex)) * 3.0);
+    // Wood grain — runs along the plank's local axis picked above.
+    float offsetGrain = grainCoord + plankHash * 20.0;
+    float grain = sin(offsetGrain + noise(vec2(offsetGrain * 0.5, plankIndex)) * 3.0);
     grain = grain * 0.5 + 0.5;
     woodColor *= 0.9 + grain * 0.15;
 
     // Fine grain detail
-    float fineGrain = noise(vec2(grainCoord * 3.0, worldPos.y * 2.0 + plankIndex * 5.0));
+    float fineGrain = noise(vec2(offsetGrain * 3.0, plankCoord * 2.0 + plankIndex * 5.0));
     woodColor *= 0.95 + fineGrain * 0.1;
 
     // Knot holes — rare dark circles
-    float knotSeed = hash21(vec2(plankIndex * 43.7, floor(grainCoord * 0.3)));
+    float knotSeed = hash21(vec2(plankIndex * 43.7, floor(offsetGrain * 0.3)));
     if (knotSeed > 0.92) {
         vec2 knotCenter = vec2(
             fract(knotSeed * 127.1) * 0.8 + 0.1,
             0.5
         );
-        vec2 knotUV = vec2(fract(grainCoord * 0.15), withinPlank);
+        vec2 knotUV = vec2(fract(offsetGrain * 0.15), withinPlank);
         float knotDist = length(knotUV - knotCenter);
         if (knotDist < 0.08) {
             woodColor *= 0.4 + knotDist * 5.0; // dark center, lighter rim
@@ -526,7 +557,7 @@ vec3 computeWoodPlanks(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOu
     float nailSeed = hash21(vec2(plankIndex * 11.1, 0.0));
     if (fract(nailSeed * 7.7) > 0.7) {
         vec2 nailPos = vec2(fract(nailSeed * 31.3) * 0.6 + 0.2, 0.5);
-        vec2 nailUV = vec2(fract((worldPos.x + worldPos.z) * 2.0), withinPlank);
+        vec2 nailUV = vec2(fract(grainCoord * 2.0), withinPlank);
         if (length(nailUV - nailPos) < 0.015) {
             woodColor = vec3(0.3, 0.3, 0.35); // metal nail
         }
@@ -540,7 +571,7 @@ vec3 computeWoodPlanks(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOu
     woodColor *= 0.85 + weather * 0.2;
 
     // Normal perturbation — grain direction bumps
-    float bumpX = noise(vec2(grainCoord + 0.1, worldPos.y * 8.0)) - 0.5;
+    float bumpX = noise(vec2(offsetGrain + 0.1, plankCoord * 8.0)) - 0.5;
     float bumpY = (withinPlank < 0.04 || withinPlank > 0.96) ? -0.3 : 0.0; // gap indent
     N = normalize(N + vec3(bumpX * 0.08, bumpY, bumpX * 0.05));
 
@@ -553,8 +584,12 @@ vec3 computeWoodPlanks(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOu
 // ================================================================
 
 vec3 computeThatch(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
-    // Straw strands running diagonally across the roof
-    float strandAngle = worldPos.x * 12.0 + worldPos.z * 6.0 + worldPos.y * 4.0;
+    // Strand direction is locked to the roof's local axis so fibres follow
+    // the slope, regardless of the hut's yaw. Local coords × object scale
+    // keep the strand density consistent when the mesh is non-uniformly
+    // scaled.
+    vec3 scaledLocal = v_localPos * v_objectScale;
+    float strandAngle = scaledLocal.x * 12.0 + scaledLocal.z * 6.0 + scaledLocal.y * 4.0;
     float strand1 = sin(strandAngle) * 0.5 + 0.5;
     float strand2 = sin(strandAngle * 1.7 + 3.0) * 0.5 + 0.5;
     float strand3 = sin(strandAngle * 0.6 + 7.0) * 0.5 + 0.5;
@@ -563,9 +598,9 @@ vec3 computeThatch(vec3 N, vec3 worldPos, vec3 baseAlbedo, out float roughOut) {
     float density = strand1 * 0.4 + strand2 * 0.35 + strand3 * 0.25;
     density = smoothstep(0.2, 0.8, density);
 
-    // Color — golden straw with variation
+    // Color — golden straw with variation; local-space fbm follows the roof.
     vec3 strawColor = baseAlbedo;
-    float n = fbm(worldPos.xz * 5.0 + worldPos.y * 3.0, 3);
+    float n = fbm(scaledLocal.xz * 5.0 + scaledLocal.y * 3.0, 3);
     strawColor *= 0.75 + n * 0.5;
 
     // Individual strand highlights
