@@ -244,15 +244,13 @@ class VioRenderer3D implements Renderer3DInterface
         // The fragment shader reconstructs a world-space view ray per pixel
         // from u_sky_inv_vp and evaluates the gradient + sun/moon analytically
         // — no skybox geometry. Opaque geometry overwrites wherever it draws.
-        if ($this->pendingSky !== null && $this->currentViewMatrix !== null && $this->currentProjectionMatrix !== null) {
+        if ($this->pendingSky !== null) {
             $this->renderAtmosphericSky($this->pendingSky);
         }
         // Legacy cubemap skybox still supported; rendered only if no SetSky
         // command was issued this frame.
         if ($this->pendingSky === null
-            && $this->pendingSkyboxId !== null
-            && $this->currentViewMatrix !== null
-            && $this->currentProjectionMatrix !== null) {
+            && $this->pendingSkyboxId !== null) {
             $this->renderSkybox($this->pendingSkyboxId);
         }
         $this->pendingSky = null;
