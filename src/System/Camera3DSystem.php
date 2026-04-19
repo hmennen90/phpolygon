@@ -32,6 +32,10 @@ class Camera3DSystem extends AbstractSystem
 
             $transform = $entity->get(Transform3D::class);
             $worldPos = $transform->getWorldPosition();
+            $eyeOffset = $cam->eyeOffset;
+            if ($eyeOffset->x !== 0.0 || $eyeOffset->y !== 0.0 || $eyeOffset->z !== 0.0) {
+                $worldPos = $worldPos->add($eyeOffset);
+            }
 
             $forward = $transform->rotation->rotateVec3(new Vec3(0.0, 0.0, -1.0));
             $up      = $transform->rotation->rotateVec3(new Vec3(0.0, 1.0, 0.0));
