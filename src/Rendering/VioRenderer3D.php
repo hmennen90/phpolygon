@@ -98,6 +98,7 @@ class VioRenderer3D implements Renderer3DInterface
     private array $cubemapCache = [];
     private ?string $pendingSkyboxId = null;
     private ?SetSky $pendingSky = null;
+    private float $rainWetness = 0.0;
 
     private ?VioTextureManager $textureManager = null;
 
@@ -198,6 +199,8 @@ class VioRenderer3D implements Renderer3DInterface
                 $this->shaderOverride = $cmd->shaderId;
             } elseif ($cmd instanceof Command\SetSnowCover) {
                 $this->snowCover = $cmd->cover;
+            } elseif ($cmd instanceof Command\SetGroundWetness) {
+                $this->rainWetness = $cmd->rainWetness;
             } elseif ($cmd instanceof SetWaveAnimation) {
                 $waveEnabled = $cmd->enabled;
                 $waveAmplitude = $cmd->amplitude;
@@ -1214,6 +1217,7 @@ class VioRenderer3D implements Renderer3DInterface
         vio_set_uniform($this->ctx, 'u_sky_color', [0.55, 0.70, 0.85]);
         vio_set_uniform($this->ctx, 'u_horizon_color', [0.85, 0.88, 0.92]);
         vio_set_uniform($this->ctx, 'u_snow_cover', $this->snowCover);
+        vio_set_uniform($this->ctx, 'u_rain_wetness', $this->rainWetness);
         vio_set_uniform($this->ctx, 'u_vertex_anim', 0); // enabled per-material in applyMaterial
         vio_set_uniform($this->ctx, 'u_wave_amplitude', $state['waveAmplitude']);
         vio_set_uniform($this->ctx, 'u_wave_frequency', $state['waveFrequency']);
@@ -1381,6 +1385,7 @@ uniform float u_roughness;
 uniform float u_metallic;
 uniform float u_alpha;
 uniform float u_snow_cover; // 0.0 = no snow, 1.0 = full blanket
+uniform float u_rain_wetness; // 0.0 = dry, 1.0 = rain-soaked
 uniform vec3 u_fog_color;
 uniform float u_fog_near;
 uniform float u_fog_far;
@@ -1505,41 +1510,70 @@ vec4 outputColor(vec3 color, float alpha) {
 // ================================================================
 
 vec3 computeSand(vec3 N, vec3 V, vec3 L, out float roughOut) {
+    // One unified sand layer. The base colour comes from the material's
+    // albedo (u_albedo) and is modulated by per-pixel environmental state:
+    //
+    //   - shore wetness (from terrain UV.x — low = close to water)
+    //   - global rain wetness (u_rain_wetness from the weather system)
+    //   - cumulative wetness darkens the sand and smooths roughness
+    //   - rain-driven puddles open up in low-lying areas
+    //   - snow, footprint decals, sun glint stay on top of this base
+    //
+    // Zone-based colour bands (dry/mid/damp/dune) are gone — everything
+    // comes from the environmental state feeding the shader.
     float zone = v_uv.x;
-    float variant = v_uv.y;
 
-    const vec3 damp[4] = vec3[](vec3(0.478,0.369,0.165), vec3(0.408,0.306,0.125), vec3(0.541,0.408,0.188), vec3(0.290,0.220,0.094));
-    const vec3 mid[4]  = vec3[](vec3(0.722,0.565,0.314), vec3(0.627,0.471,0.220), vec3(0.784,0.596,0.345), vec3(0.420,0.333,0.157));
-    const vec3 dry[4]  = vec3[](vec3(0.831,0.722,0.478), vec3(0.769,0.643,0.384), vec3(0.878,0.769,0.549), vec3(0.545,0.451,0.251));
-    const vec3 dune[4] = vec3[](vec3(0.863,0.753,0.502), vec3(0.910,0.800,0.565), vec3(0.816,0.706,0.439), vec3(0.604,0.502,0.282));
+    vec3 baseColor = u_albedo * u_season_tint;
 
-    vec3 colors[4];
-    if (zone < 0.125)      colors = damp;
-    else if (zone < 0.375) colors = mid;
-    else if (zone < 0.625) colors = dry;
-    else                   colors = dune;
-
-    float vi = variant * 3.0;
-    int idx = int(floor(vi));
-    vec3 baseColor = mix(colors[clamp(idx,0,3)], colors[clamp(idx+1,0,3)], fract(vi));
-    baseColor *= u_season_tint;
-
+    // Three noise octaves: broad patches, mid texture, individual grains.
     float n1 = fbm2(v_worldPos.xz * 1.5);
     float n2 = noise(v_worldPos.xz * 6.0);
+    float n3 = noise(v_worldPos.xz * 28.0);    // grain-scale high frequency
+    float n4 = hash21(floor(v_worldPos.xz * 80.0)); // per-pixel speckle
 
     vec3 sandColor = baseColor;
-    sandColor *= 0.82 + n1 * 0.36;
-    sandColor *= 0.92 + (n2 - 0.5) * 0.16;
+    sandColor *= 0.82 + n1 * 0.36;                 // broad light/dark patches
+    sandColor *= 0.88 + (n2 - 0.5) * 0.22;         // mid-scale variation
+    sandColor *= 0.85 + (n3 - 0.5) * 0.30;         // individual grains
+    sandColor *= 0.95 + (n4 - 0.5) * 0.12;         // sharp speckle
 
-    float ripple = sin(v_worldPos.x * 3.0 + v_worldPos.z * 1.5 + n1 * 2.0) * 0.5 + 0.5;
+    // Darker mineral specks sprinkled on top (quartz/feldspar/mica grains).
+    float specks = smoothstep(0.82, 0.88, n4);
+    sandColor *= 1.0 - specks * 0.35;
+
+    // Crisp wind-ripples — stronger on dunes, faded near water.
+    float ripple = sin(v_worldPos.x * 3.5 + v_worldPos.z * 1.8 + n1 * 2.0) * 0.5 + 0.5;
     ripple = smoothstep(0.3, 0.7, ripple);
-    sandColor *= 1.0 - ripple * 0.06 * smoothstep(0.3, 0.8, zone);
+    sandColor *= 1.0 - ripple * 0.09 * smoothstep(0.35, 0.9, zone);
 
+    // Shore wetness: geometry-driven from the terrain UV zone. Close to the
+    // waterline the mesh encodes a low zone value → permanently damp sand.
+    float shoreWet = 1.0 - smoothstep(0.0, 0.35, zone);
+    float wetness = max(shoreWet, u_rain_wetness);
+
+    // Wet sand is darker + warmer-brown. Keep blue channel low.
+    vec3 wetTint = baseColor * vec3(0.40, 0.32, 0.20);
+    sandColor = mix(sandColor, wetTint, wetness * 0.7);
+
+    // Puddles: low-frequency noise gated by wetness. Flat reflective patches
+    // of water tint over wet sand. Only form where wetness is high enough.
+    if (wetness > 0.35) {
+        float puddleNoise = fbm2(v_worldPos.xz * 0.35);
+        float puddleMask = smoothstep(0.52, 0.68, puddleNoise)
+                         * smoothstep(0.35, 0.85, wetness);
+        // Reflective puddle colour: picks up ambient + sunlight on surface.
+        vec3 puddleColor = u_ambient_color * 0.6
+                         + u_dir_lights[0].color * u_dir_lights[0].intensity * 0.25
+                         + vec3(0.04, 0.07, 0.09);
+        sandColor = mix(sandColor, puddleColor, puddleMask * 0.75);
+    }
+
+    // Subsurface scattering from low-angle sun (warm halo effect).
     float scatter = pow(max(dot(V, L), 0.0), 4.0) * 0.08;
-    sandColor += vec3(0.15, 0.10, 0.04) * scatter;
+    sandColor += vec3(0.15, 0.10, 0.04) * scatter * (1.0 - wetness * 0.5);
 
-    roughOut = mix(0.45, 0.95, smoothstep(0.0, 0.3, zone));
-    if (zone < 0.15) sandColor *= 1.04;
+    // Roughness: dry sand is rough, wet/puddle is smooth (specular).
+    roughOut = mix(0.92, 0.20, wetness);
 
     return sandColor;
 }

@@ -15,6 +15,7 @@ use PHPolygon\ECS\World;
 use PHPolygon\Rendering\Command\AddPointLight;
 use PHPolygon\Rendering\Command\DrawMesh;
 use PHPolygon\Rendering\Command\SetDirectionalLight;
+use PHPolygon\Rendering\Command\SetGroundWetness;
 use PHPolygon\Rendering\Command\SetSnowCover;
 use PHPolygon\Rendering\Command\SetWaveAnimation;
 use PHPolygon\Rendering\RenderCommandList;
@@ -70,21 +71,27 @@ class Renderer3DSystem extends AbstractSystem
             ));
         }
 
-        // Wave animation driven by wind + weather
+        // Wave animation driven by wind + weather; ground wetness from rain.
         $windIntensity = 0.5;
         $stormIntensity = 0.0;
+        $rainWetness = 0.0;
         foreach ($world->query(Wind::class) as $entity) {
             $windIntensity = $entity->get(Wind::class)->intensity;
             break;
         }
         foreach ($world->query(Weather::class) as $entity) {
-            $stormIntensity = $entity->get(Weather::class)->stormIntensity;
+            $weather = $entity->get(Weather::class);
+            $stormIntensity = $weather->stormIntensity;
+            // Rain soaks the ground faster than it evaporates. Also persist a
+            // bit of surface moisture after storms so sand doesn't snap to dry.
+            $rainWetness = min(1.0, $weather->rainIntensity * 1.2 + $weather->stormIntensity * 0.4);
             break;
         }
         $waveAmp = 0.1 + $windIntensity * 0.25 + $stormIntensity * 0.35;
         $waveFreq = 0.4 + $windIntensity * 0.15 + $stormIntensity * 0.15;
-        // Snow cover
+        // Snow cover + rain wetness (both drive the procedural ground shader)
         $this->commandList->add(new SetSnowCover($this->snowCover));
+        $this->commandList->add(new SetGroundWetness($rainWetness));
 
         $this->commandList->add(new SetWaveAnimation(
             enabled: true,
