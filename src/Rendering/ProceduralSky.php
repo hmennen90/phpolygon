@@ -217,10 +217,13 @@ class ProceduralSky
         $iy = (int)floor($dir->y * $scale);
         $iz = (int)floor($dir->z * $scale);
 
-        // Simple integer hash
-        $h = $ix * 374761393 + $iy * 668265263 + $iz * 1274126177 + $seed;
-        $h = ($h ^ ($h >> 13)) * 1103515245;
-        $h = $h ^ ($h >> 16);
+        // Simple integer hash. Mask each intermediate to 32 bits so 64-bit
+        // multiplications don't overflow into float territory — PHP's >>
+        // operator errors out if the left operand became a float.
+        $mask = 0xFFFFFFFF;
+        $h = (int)(($ix * 374761393 + $iy * 668265263 + $iz * 1274126177 + $seed) & $mask);
+        $h = (int)((($h ^ (($h >> 13) & $mask)) * 1103515245) & $mask);
+        $h = (int)(($h ^ (($h >> 16) & $mask)) & $mask);
 
         return ($h & 0xFFFF) / 65536.0;
     }

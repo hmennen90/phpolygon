@@ -16,6 +16,7 @@ use PHPolygon\Rendering\Command\SetCamera;
 use PHPolygon\Rendering\Command\SetDirectionalLight;
 use PHPolygon\Rendering\Command\SetFog;
 use PHPolygon\Rendering\Command\SetShader;
+use PHPolygon\Rendering\Command\SetSky;
 use PHPolygon\Rendering\Command\SetSkybox;
 use PHPolygon\Rendering\Command\SetWaveAnimation;
 use VioContext;
@@ -96,6 +97,7 @@ class VioRenderer3D implements Renderer3DInterface
      */
     private array $cubemapCache = [];
     private ?string $pendingSkyboxId = null;
+    private ?SetSky $pendingSky = null;
 
     private ?VioTextureManager $textureManager = null;
 
@@ -190,6 +192,8 @@ class VioRenderer3D implements Renderer3DInterface
                 $fogFar = $cmd->far;
             } elseif ($cmd instanceof SetSkybox) {
                 $this->pendingSkyboxId = $cmd->cubemapId;
+            } elseif ($cmd instanceof SetSky) {
+                $this->pendingSky = $cmd;
             } elseif ($cmd instanceof SetShader) {
                 $this->shaderOverride = $cmd->shaderId;
             } elseif ($cmd instanceof Command\SetSnowCover) {
@@ -233,6 +237,24 @@ class VioRenderer3D implements Renderer3DInterface
 
         vio_viewport($this->ctx, 0, 0, $this->width, $this->height);
 
+        // --- Atmospheric sky (fullscreen, depth test off, rendered first).
+        // The fragment shader reconstructs a world-space view ray per pixel
+        // from u_sky_inv_vp and evaluates the gradient + sun/moon analytically
+        // — no skybox geometry. Opaque geometry overwrites wherever it draws.
+        if ($this->pendingSky !== null && $this->currentViewMatrix !== null && $this->currentProjectionMatrix !== null) {
+            $this->renderAtmosphericSky($this->pendingSky);
+        }
+        // Legacy cubemap skybox still supported; rendered only if no SetSky
+        // command was issued this frame.
+        if ($this->pendingSky === null
+            && $this->pendingSkyboxId !== null
+            && $this->currentViewMatrix !== null
+            && $this->currentProjectionMatrix !== null) {
+            $this->renderSkybox($this->pendingSkyboxId);
+        }
+        $this->pendingSky = null;
+        $this->pendingSkyboxId = null;
+
         // --- Pass 2: Opaque geometry ---
         $this->bindPipeline('opaque');
         $this->uploadFrameUniforms($frameState);
@@ -273,12 +295,6 @@ class VioRenderer3D implements Renderer3DInterface
                 }
                 $this->drawMeshInstancedCommand($cmd->meshId, $material, $cmd->matrices, $cmd->isStatic, $cmd->materialId);
             }
-        }
-
-        // --- Skybox (rendered last, at max depth via LEQUAL) ---
-        if ($this->pendingSkyboxId !== null && $this->currentViewMatrix !== null && $this->currentProjectionMatrix !== null) {
-            $this->renderSkybox($this->pendingSkyboxId);
-            $this->pendingSkyboxId = null;
         }
 
         // --- Post-processing: HDR → Bloom → Tonemap → Backbuffer ---
@@ -363,6 +379,7 @@ class VioRenderer3D implements Renderer3DInterface
         $this->compileShader('depth', self::DEPTH_VERT, self::DEPTH_FRAG);
         $this->compileShader('normals', self::NORMALS_VERT, self::NORMALS_FRAG);
         $this->compileShader('skybox', self::SKYBOX_VERT, self::SKYBOX_FRAG);
+        $this->compileShader('atmosphere', self::ATMOSPHERE_VERT, self::ATMOSPHERE_FRAG);
     }
 
     private function initPostProcess(): void
@@ -652,15 +669,24 @@ class VioRenderer3D implements Renderer3DInterface
 
     private function initSkyboxMesh(): void
     {
+        // Huge cube (±500 units). The vertex shader strips the view matrix's
+        // translation so the cube stays centred on the camera; the large
+        // size ensures the cube is always beyond the near plane regardless
+        // of camera position within the scene, and the projected depth is
+        // close to the far plane so LEQUAL lets opaque geometry win at
+        // every already-rendered pixel.
+        // Size chosen so the farthest cube vertex (diagonal corner) is
+        // just inside a 500-unit camera far plane: 250 * sqrt(3) ≈ 433.
+        $s = 250.0;
         $v = [
-            -1.0, -1.0, -1.0,  // 0: left  bottom back
-             1.0, -1.0, -1.0,  // 1: right bottom back
-             1.0,  1.0, -1.0,  // 2: right top    back
-            -1.0,  1.0, -1.0,  // 3: left  top    back
-            -1.0, -1.0,  1.0,  // 4: left  bottom front
-             1.0, -1.0,  1.0,  // 5: right bottom front
-             1.0,  1.0,  1.0,  // 6: right top    front
-            -1.0,  1.0,  1.0,  // 7: left  top    front
+            -$s, -$s, -$s,
+             $s, -$s, -$s,
+             $s,  $s, -$s,
+            -$s,  $s, -$s,
+            -$s, -$s,  $s,
+             $s, -$s,  $s,
+             $s,  $s,  $s,
+            -$s,  $s,  $s,
         ];
 
         $indices = [
@@ -730,6 +756,78 @@ class VioRenderer3D implements Renderer3DInterface
         return $cubemap;
     }
 
+    private function renderAtmosphericSky(SetSky $sky): void
+    {
+        $quad = $this->screenQuad;
+        $viewMatrix = $this->currentViewMatrix;
+        $projMatrix = $this->currentProjectionMatrix;
+        if ($quad === null || $viewMatrix === null || $projMatrix === null) {
+            return;
+        }
+
+        // Build inverse(projection * view_without_translation). The fragment
+        // shader uses this to unproject NDC back into a world-space view
+        // direction. Translation is stripped so direction is independent of
+        // camera position — the sky only depends on where the camera LOOKS.
+        $vm = $viewMatrix->toArray();
+        $rotView = new Mat4([
+            $vm[0], $vm[1], $vm[2], 0.0,
+            $vm[4], $vm[5], $vm[6], 0.0,
+            $vm[8], $vm[9], $vm[10], 0.0,
+            0.0,    0.0,    0.0,     1.0,
+        ]);
+        // GL convention: gl_Position = projection * view * worldPos, so
+        // the clip→world mapping we need is inverse(projection * rotView).
+        // Mat4::multiply is standard math: $a->multiply($b) returns a * b.
+        $vp = $projMatrix->multiply($rotView);
+        $invVP = $vp->inverse();
+
+        $this->bindAtmospherePipeline();
+
+        vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP->toArray());
+
+        $sunDir = $sky->sunDirection;
+        vio_set_uniform($this->ctx, 'u_sun_direction', [$sunDir->x, $sunDir->y, $sunDir->z]);
+        vio_set_uniform($this->ctx, 'u_sun_color', [$sky->sunColor->r, $sky->sunColor->g, $sky->sunColor->b]);
+        vio_set_uniform($this->ctx, 'u_sun_intensity', $sky->sunIntensity);
+
+        vio_set_uniform($this->ctx, 'u_zenith_color', [$sky->zenithColor->r, $sky->zenithColor->g, $sky->zenithColor->b]);
+        vio_set_uniform($this->ctx, 'u_horizon_color', [$sky->horizonColor->r, $sky->horizonColor->g, $sky->horizonColor->b]);
+        vio_set_uniform($this->ctx, 'u_ground_color', [$sky->groundColor->r, $sky->groundColor->g, $sky->groundColor->b]);
+
+        vio_set_uniform($this->ctx, 'u_sun_size', $sky->sunSize);
+        vio_set_uniform($this->ctx, 'u_sun_glow_size', $sky->sunGlowSize);
+        vio_set_uniform($this->ctx, 'u_sun_glow_intensity', $sky->sunGlowIntensity);
+
+        $moonDir = $sky->moonDirection ?? new Vec3(0.0, -1.0, 0.0);
+        vio_set_uniform($this->ctx, 'u_moon_direction', [$moonDir->x, $moonDir->y, $moonDir->z]);
+        vio_set_uniform($this->ctx, 'u_moon_color', [$sky->moonColor->r, $sky->moonColor->g, $sky->moonColor->b]);
+        vio_set_uniform($this->ctx, 'u_moon_intensity', $sky->moonIntensity);
+
+        vio_set_uniform($this->ctx, 'u_star_brightness', $sky->starBrightness);
+
+        vio_draw($this->ctx, $quad);
+    }
+
+    private function bindAtmospherePipeline(): void
+    {
+        $key = 'atmosphere:atmosphere';
+        if (!isset($this->pipelineCache[$key])) {
+            $shader = $this->shaderCache['atmosphere'];
+            $pipeline = vio_pipeline($this->ctx, [
+                'shader' => $shader,
+                'depth_test' => false,
+                'cull_mode' => VIO_CULL_NONE,
+                'blend' => VIO_BLEND_NONE,
+            ]);
+            if ($pipeline === false) {
+                return;
+            }
+            $this->pipelineCache[$key] = $pipeline;
+        }
+        vio_bind_pipeline($this->ctx, $this->pipelineCache[$key]);
+    }
+
     private function renderSkybox(string $cubemapId): void
     {
         $viewMatrix = $this->currentViewMatrix;
@@ -773,10 +871,15 @@ class VioRenderer3D implements Renderer3DInterface
         if (!isset($this->pipelineCache[$key])) {
             $shader = $this->shaderCache['skybox'];
 
+            // Skybox is rendered FIRST (before opaque geometry) with depth
+            // test disabled. The cube fills every pixel with cubemap color;
+            // opaque geometry then overwrites with its own depth writes.
+            // This avoids the classic .xyww far-plane trick which doesn't
+            // survive SPIRV-Cross's HLSL depth-convention fixup, and it
+            // also avoids far-plane clipping at the cube's diagonal corners.
             $pipeline = vio_pipeline($this->ctx, [
                 'shader' => $shader,
-                'depth_test' => true,
-                'depth_func' => VIO_DEPTH_LEQUAL,
+                'depth_test' => false,
                 'cull_mode' => VIO_CULL_NONE,
                 'blend' => VIO_BLEND_NONE,
             ]);
@@ -1905,6 +2008,126 @@ void main() {
 }
 GLSL;
 
+    // Atmospheric sky — fullscreen quad that reconstructs a world-space
+    // view ray per pixel and evaluates a gradient + sun disc directly.
+    // No skybox geometry involved. Rendered before opaque with depth test
+    // OFF; opaque geometry overwrites whatever it touches.
+    private const ATMOSPHERE_VERT = <<<'GLSL'
+#version 410 core
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec2 a_uv;
+out vec2 v_ndc;
+void main() {
+    // Full clip-space quad at z = 1 (far plane). Depth test is disabled so
+    // the actual depth value doesn't matter, but writing z = 1 keeps the
+    // sky behind anything that uses this depth buffer later.
+    gl_Position = vec4(a_position.xy, 1.0, 1.0);
+    v_ndc = a_position.xy;
+}
+GLSL;
+
+    private const ATMOSPHERE_FRAG = <<<'GLSL'
+#version 410 core
+in vec2 v_ndc;
+
+uniform mat4 u_sky_inv_vp;        // inverse(projection * view_without_translation)
+uniform vec3 u_sun_direction;     // normalized, toward the sun
+uniform vec3 u_sun_color;
+uniform float u_sun_intensity;
+uniform vec3 u_zenith_color;
+uniform vec3 u_horizon_color;
+uniform vec3 u_ground_color;
+uniform float u_sun_size;         // angular radius of the sun disc (rad)
+uniform float u_sun_glow_size;    // angular extent of the glow halo (rad)
+uniform float u_sun_glow_intensity;
+uniform vec3 u_moon_direction;
+uniform vec3 u_moon_color;
+uniform float u_moon_intensity;
+uniform float u_star_brightness;
+
+out vec4 frag_color;
+
+float smoothstep01(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Small hash used for twinkly starfield — no texture needed.
+float hash31(vec3 p) {
+    return fract(sin(dot(p, vec3(443.897, 441.423, 437.195))) * 43758.5453);
+}
+
+void main() {
+    // Reconstruct the world-space view direction for this pixel.
+    vec4 world = u_sky_inv_vp * vec4(v_ndc, 1.0, 1.0);
+    vec3 dir = normalize(world.xyz / world.w);
+
+    float elevation = dir.y;
+
+    // Base gradient: horizon toward zenith above, toward ground below.
+    vec3 color;
+    if (elevation >= 0.0) {
+        float t = smoothstep01(0.0, 1.0, elevation);
+        color = mix(u_horizon_color, u_zenith_color, t);
+    } else {
+        float t = smoothstep01(0.0, -0.3, elevation);
+        color = mix(u_horizon_color, u_ground_color, t);
+    }
+
+    // Sun disc + glow halo + horizon scatter.
+    if (u_sun_intensity > 0.0) {
+        float cosA = dot(dir, u_sun_direction);
+        float angle = acos(clamp(cosA, -1.0, 1.0));
+
+        // Soft sun disc
+        float disc = 1.0 - smoothstep01(u_sun_size * 0.5, u_sun_size, angle);
+        color = mix(color, u_sun_color * u_sun_intensity, disc);
+
+        // Glow halo
+        if (angle < u_sun_glow_size) {
+            float g = 1.0 - angle / u_sun_glow_size;
+            g = g * g * u_sun_glow_intensity;
+            color += u_sun_color * u_sun_intensity * g;
+        }
+
+        // Warm horizon scattering near the sun direction (sunset band).
+        if (elevation > -0.05 && elevation < 0.25) {
+            float band = 1.0 - abs(elevation - 0.05) / 0.20;
+            band = max(0.0, band);
+            float s = max(0.0, cosA) * band * 0.35 * u_sun_intensity;
+            color += u_sun_color * s;
+        }
+    }
+
+    // Moon (below-horizon sun opposite): faint disc + soft cool glow.
+    if (u_moon_intensity > 0.0) {
+        float cosM = dot(dir, u_moon_direction);
+        float angle = acos(clamp(cosM, -1.0, 1.0));
+        float disc = 1.0 - smoothstep01(u_sun_size * 0.7, u_sun_size * 1.4, angle);
+        color = mix(color, u_moon_color * u_moon_intensity, disc);
+        if (angle < u_sun_glow_size * 0.6) {
+            float g = 1.0 - angle / (u_sun_glow_size * 0.6);
+            g = g * g * 0.35 * u_moon_intensity;
+            color += u_moon_color * g;
+        }
+    }
+
+    // Stars — only above the horizon and only when bright enough.
+    if (u_star_brightness > 0.0 && elevation > 0.0) {
+        vec3 cell = floor(dir * 200.0);
+        float n = hash31(cell);
+        if (n > 0.9975) {
+            float twinkle = (n - 0.9975) * 400.0;
+            // Fade stars near horizon (atmospheric extinction).
+            float fadeEdge = smoothstep01(0.0, 0.15, elevation);
+            color += vec3(twinkle) * u_star_brightness * fadeEdge;
+        }
+    }
+
+    frag_color = vec4(color, 1.0);
+}
+GLSL;
+
     private const SKYBOX_VERT = <<<'GLSL'
 #version 410 core
 
@@ -1917,9 +2140,9 @@ out vec3 v_texCoord;
 
 void main() {
     v_texCoord = a_position;
+    // Strip translation so the cube follows the camera.
     mat4 rotView = mat4(mat3(u_view));
-    vec4 pos = u_projection * rotView * vec4(a_position, 1.0);
-    gl_Position = pos.xyww;
+    gl_Position = u_projection * rotView * vec4(a_position, 1.0);
 }
 GLSL;
 

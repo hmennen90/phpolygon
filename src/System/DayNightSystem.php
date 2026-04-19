@@ -15,12 +15,10 @@ use PHPolygon\Math\Vec3;
 use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\Command\SetAmbientLight;
 use PHPolygon\Rendering\Command\SetFog;
-use PHPolygon\Rendering\Command\SetSkybox;
+use PHPolygon\Rendering\Command\SetSky;
 use PHPolygon\Rendering\Command\SetSkyColors;
-use PHPolygon\Rendering\CubemapRegistry;
 use PHPolygon\Rendering\Material;
 use PHPolygon\Rendering\MaterialRegistry;
-use PHPolygon\Rendering\ProceduralCubemap;
 use PHPolygon\Rendering\RenderCommandList;
 
 /**
@@ -126,13 +124,8 @@ class DayNightSystem extends AbstractSystem
 
     private ?DayNightCycle $cachedCycle = null;
 
-    /**
-     * Last time-of-day the skybox cubemap was regenerated. The cubemap is
-     * re-baked whenever the sun has moved far enough for the atmospheric
-     * scattering gradient to look different.
-     */
-    private float $lastSkyboxTime = -1.0;
-    private float $lastCloudDarkening = 0.0;
+    // Sky is now evaluated per-pixel by the atmospheric fragment shader
+    // each frame — no caching or regeneration threshold needed.
 
     public function update(World $world, float $dt): void
     {
@@ -362,70 +355,60 @@ class DayNightSystem extends AbstractSystem
             horizonColor: $horizonColor,
         ));
 
-        // --- Procedural skybox with atmospheric scattering ---
-        // Regenerate whenever the sun has moved far enough (or cloud cover
-        // changed) for the gradient to look visibly different. Thresholds
-        // are tuned so a 60-second day triggers ~5 regens per daytime.
-        $timeDelta = abs($t - $this->lastSkyboxTime);
-        if ($timeDelta > 0.5) $timeDelta = 1.0 - $timeDelta; // handle wrap
-        $cloudDelta = abs($cycle->cloudDarkening - $this->lastCloudDarkening);
+        // --- Atmospheric sky parameters (evaluated per-pixel by the
+        // fragment shader). Cloud cover desaturates and darkens the sky;
+        // sun size/glow grow near the horizon for a natural sunset look.
+        $zenithRaw = self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t);
+        $cloudMute = 1.0 - $cycle->cloudDarkening * 0.55;
+        $zenithColor = new Color(
+            $zenithRaw['r'] * $cloudMute,
+            $zenithRaw['g'] * $cloudMute,
+            $zenithRaw['b'] * $cloudMute + $cycle->cloudDarkening * 0.08,
+        );
+        $horizonMuted = new Color(
+            $horizon['r'] * $cloudMute + $cycle->cloudDarkening * 0.08,
+            $horizon['g'] * $cloudMute + $cycle->cloudDarkening * 0.08,
+            $horizon['b'] * $cloudMute + $cycle->cloudDarkening * 0.10,
+        );
+        $groundColor = new Color(
+            $horizon['r'] * 0.35,
+            $horizon['g'] * 0.30,
+            $horizon['b'] * 0.25,
+        );
 
-        if ($this->lastSkyboxTime < 0.0 || $timeDelta > 0.008 || $cloudDelta > 0.05) {
-            $zenith = self::interpolateKeysRGB(self::SKY_ZENITH_KEYS, $t);
-            $zenithColor = new Color($zenith['r'], $zenith['g'], $zenith['b']);
+        $lowSun = max(0.0, 1.0 - $cycle->getSunHeight());
+        $sunSize = 0.018 + $lowSun * 0.020;
+        $sunGlowSize = 0.15 + $lowSun * 0.25;
+        $sunGlowIntensity = ($lowSun * 0.45 + 0.25) * max(0.1, $sunColor['intensity']);
 
-            // Cloud cover desaturates and darkens the sky.
-            $cloudMute = 1.0 - $cycle->cloudDarkening * 0.55;
-            $zenithColor = new Color(
-                $zenithColor->r * $cloudMute,
-                $zenithColor->g * $cloudMute,
-                $zenithColor->b * $cloudMute + $cycle->cloudDarkening * 0.08,
-            );
-            $horizonMuted = new Color(
-                $horizon['r'] * $cloudMute + $cycle->cloudDarkening * 0.08,
-                $horizon['g'] * $cloudMute + $cycle->cloudDarkening * 0.08,
-                $horizon['b'] * $cloudMute + $cycle->cloudDarkening * 0.10,
-            );
+        // Direction FROM surface TOWARD the sun (opposite of light travel direction).
+        $skySunDir = $sunVisible
+            ? new Vec3(-$sunDirX, -$sunDirY, -$sunDirZ)
+            : new Vec3(0.0, -1.0, 0.0);
+        $skyMoonDir = ($moonVisible && $moonY > 0)
+            ? (new Vec3($moonX, $moonY, $moonZ))->normalize()
+            : new Vec3(0.0, -1.0, 0.0);
 
-            // Sun size/glow grow near the horizon for a natural sunset look.
-            $lowSun = max(0.0, 1.0 - $cycle->getSunHeight());
-            $sunSize = 0.018 + $lowSun * 0.020;
-            $sunGlowSize = 0.15 + $lowSun * 0.25;
-            $sunGlowIntensity = 0.25 + $lowSun * 0.45;
-
-            // Sun direction points from the sky dot toward the ground. For the
-            // skybox the "direction toward the sun" is the negated light dir.
-            $skySunDir = $sunVisible
-                ? (new Vec3(-$sunDirX, -$sunDirY, -$sunDirZ))
-                : null;
-
-            $sky = new \PHPolygon\Rendering\ProceduralSky(
-                zenithColor: $zenithColor,
-                horizonColor: $horizonMuted,
-                groundColor: new Color(
-                    $horizon['r'] * 0.35,
-                    $horizon['g'] * 0.30,
-                    $horizon['b'] * 0.25,
-                ),
-                sunDirection: $skySunDir,
-                sunColor: new Color(
-                    min(1.0, $sunColor['r'] + 0.05),
-                    min(1.0, $sunColor['g'] + 0.05),
-                    min(1.0, $sunColor['b'] + 0.05),
-                ),
-                sunSize: $sunSize,
-                sunGlowSize: $sunGlowSize,
-                sunGlowIntensity: $sunGlowIntensity * max(0.1, $sunColor['intensity']),
-                starDensity: $cycle->isDaytime() ? 0.0 : 0.0015 * $moonBright,
-                starBrightness: 0.7,
-            );
-            CubemapRegistry::registerProcedural('sky', $sky->generate(64));
-
-            $this->lastSkyboxTime = $t;
-            $this->lastCloudDarkening = $cycle->cloudDarkening;
-        }
-
-        $this->commandList->add(new SetSkybox('sky'));
+        $this->commandList->add(new SetSky(
+            sunDirection: $skySunDir,
+            sunColor: new Color(
+                min(1.0, $sunColor['r'] + 0.05),
+                min(1.0, $sunColor['g'] + 0.05),
+                min(1.0, $sunColor['b'] + 0.05),
+            ),
+            sunIntensity: $sunVisible ? $sunColor['intensity'] : 0.0,
+            zenithColor: $zenithColor,
+            horizonColor: $horizonMuted,
+            groundColor: $groundColor,
+            sunSize: $sunSize,
+            sunGlowSize: $sunGlowSize,
+            sunGlowIntensity: $sunGlowIntensity,
+            moonDirection: $skyMoonDir,
+            moonColor: new Color(0.85, 0.87, 0.95),
+            moonIntensity: $moonVisible ? $moonBright : 0.0,
+            cloudCover: $cycle->cloudDarkening,
+            starBrightness: $cycle->isDaytime() ? 0.0 : 0.9 * $moonBright,
+        ));
 
         // --- Sun sphere material ---
         // Single emissive sphere; the horizon glow and scattering halo are
