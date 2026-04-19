@@ -1341,11 +1341,17 @@ uniform int u_dir_light_count;
 #define u_dir_light_color u_dir_lights[0].color
 #define u_dir_light_intensity u_dir_lights[0].intensity
 
+// Member order matters: each trailing float packs into the tail of the
+// preceding vec3's 16-byte slot, giving a clean 32-byte stride that both
+// std140 and HLSL's natural cbuffer packing agree on. The previous
+// ordering (vec3 pos, vec3 color, float intensity, float radius) ends up
+// ambiguous — SPIRV-Cross rejects it with "cannot be expressed with
+// either HLSL packing layout or packoffset".
 struct PointLight {
     vec3 position;
+    float radius;
     vec3 color;
     float intensity;
-    float radius;
 };
 uniform PointLight u_point_lights[4];
 uniform int u_point_light_count;
