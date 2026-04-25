@@ -42,6 +42,9 @@ class VioRenderer3D implements Renderer3DInterface
     /** @var array<string, VioMesh> */
     private array $meshCache = [];
 
+    /** @var array<string, int> Last seen MeshRegistry::version per cached mesh id — used to detect re-registered (dynamic / skinned) meshes and re-upload them. */
+    private array $meshCacheVersions = [];
+
     /** @var array<string, VioShader> */
     private array $shaderCache = [];
 
@@ -922,7 +925,8 @@ class VioRenderer3D implements Renderer3DInterface
 
     private function uploadMesh(string $meshId): ?VioMesh
     {
-        if (isset($this->meshCache[$meshId])) {
+        $version = MeshRegistry::version($meshId);
+        if (isset($this->meshCache[$meshId]) && ($this->meshCacheVersions[$meshId] ?? -1) === $version) {
             return $this->meshCache[$meshId];
         }
 
@@ -948,6 +952,7 @@ class VioRenderer3D implements Renderer3DInterface
         }
 
         $this->meshCache[$meshId] = $vioMesh;
+        $this->meshCacheVersions[$meshId] = $version;
         return $vioMesh;
     }
 
