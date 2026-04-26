@@ -68,6 +68,9 @@ class UIContext
     private float $viewportOffsetX = 0.0;
     private float $viewportOffsetY = 0.0;
 
+    /** Content scale for resolution-independent rendering (e.g. 2.0 = game renders at 2x) */
+    private float $contentScale = 1.0;
+
     public function __construct(
         Renderer2DInterface $renderer,
         InputInterface $input,
@@ -318,7 +321,7 @@ class UIContext
             } elseif ($hovered) {
                 // Only track value while cursor is over the bar.
                 // If cursor leaves (e.g. phantom stuck press), slider deactivates next branch.
-                $mouseX = $this->input->getMouseX() - $this->viewportOffsetX;
+                $mouseX = ($this->input->getMouseX() - $this->viewportOffsetX) / $this->contentScale;
                 $t = max(0.0, min(1.0, ($mouseX - $barX) / $barW));
                 $value = $min + ($max - $min) * $t;
             } else {
@@ -753,15 +756,25 @@ class UIContext
         $this->viewportOffsetY = $y;
     }
 
+    /**
+     * Set content scale for resolution-independent rendering.
+     * When set, mouse coordinates are divided by this factor after
+     * viewport-offset correction, so hit-testing works in virtual coordinates.
+     */
+    public function setContentScale(float $scale): void
+    {
+        $this->contentScale = max(0.001, $scale);
+    }
+
     // ── Internals ────────────────────────────────────────────────
 
     private function isHovered(Rect $rect): bool
     {
         $mouse = $this->input->getMousePosition();
-        // Adjust mouse position for viewport offset (letterboxing)
+        // Adjust mouse position for viewport offset (letterboxing) and content scale
         $adjustedMouse = new Vec2(
-            $mouse->x - $this->viewportOffsetX,
-            $mouse->y - $this->viewportOffsetY,
+            ($mouse->x - $this->viewportOffsetX) / $this->contentScale,
+            ($mouse->y - $this->viewportOffsetY) / $this->contentScale,
         );
         return $rect->contains($adjustedMouse);
     }
