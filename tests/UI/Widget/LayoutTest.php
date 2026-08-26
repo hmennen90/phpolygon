@@ -196,4 +196,118 @@ class LayoutTest extends TestCase
         $this->assertEquals(2.0, $sep->getMeasuredHeight());
         $this->assertEquals(300.0, $sep->getMeasuredWidth());
     }
+
+    // ── Fixed-size containers ────────────────────────────────────
+
+    public function testFixedHeightVBoxSharesOnlyItsOwnHeightWithFillChildren(): void
+    {
+        // A box with an explicit height is a promise about how much room its
+        // children get. Measuring the fill child against the parent's available
+        // height instead breaks that promise: the spacer claims the whole
+        // remaining viewport and everything after it is pushed outside the box —
+        // drawn off-screen and impossible to click.
+        $vbox = new VBox(spacing: 0.0);
+        $vbox->size(Sizing::fixed(100, 200));
+        $head = (new Label('head'))->size(Sizing::fixed(100, 40));
+        $gap  = new Spacer();
+        $foot = (new Label('foot'))->size(Sizing::fixed(100, 40));
+        $vbox->addChild($head)->addChild($gap)->addChild($foot);
+
+        $vbox->measure(400, 600, $this->style);
+
+        $this->assertEquals(200.0, $vbox->getMeasuredHeight());
+        $this->assertEquals(120.0, $gap->getMeasuredHeight(), 'fill child got the viewport, not the box');
+
+        $vbox->setBounds(new Rect(0, 0, 100, 200));
+        $vbox->layout($this->style);
+
+        $this->assertEquals(160.0, $foot->getBounds()->y);
+        $this->assertEquals(200.0, $foot->getBounds()->bottom());
+    }
+
+    public function testFixedHeightVBoxAccountsForItsOwnPadding(): void
+    {
+        $vbox = new VBox(spacing: 0.0);
+        $vbox->size(Sizing::fixed(100, 200));
+        $vbox->padding = new EdgeInsets(20.0, 0.0, 20.0, 0.0);
+        $gap  = new Spacer();
+        $foot = (new Label('foot'))->size(Sizing::fixed(100, 40));
+        $vbox->addChild($gap)->addChild($foot);
+
+        $vbox->measure(400, 600, $this->style);
+
+        // 200 box - 40 padding - 40 foot = 120 left for the spacer.
+        $this->assertEquals(120.0, $gap->getMeasuredHeight());
+
+        $vbox->setBounds(new Rect(0, 0, 100, 200));
+        $vbox->layout($this->style);
+
+        // The foot ends on the padded content edge (200 - 20 bottom padding).
+        $this->assertEquals(140.0, $foot->getBounds()->y);
+        $this->assertEquals(180.0, $foot->getBounds()->bottom());
+    }
+
+    public function testFixedWidthHBoxSharesOnlyItsOwnWidthWithFillChildren(): void
+    {
+        $hbox = new HBox(spacing: 0.0);
+        $hbox->size(Sizing::fixed(200, 40));
+        $left  = (new Label('L'))->size(Sizing::fixed(40, 40));
+        $gap   = new Spacer();
+        $right = (new Label('R'))->size(Sizing::fixed(40, 40));
+        $hbox->addChild($left)->addChild($gap)->addChild($right);
+
+        $hbox->measure(800, 400, $this->style);
+
+        $this->assertEquals(200.0, $hbox->getMeasuredWidth());
+        $this->assertEquals(120.0, $gap->getMeasuredWidth(), 'fill child got the viewport, not the box');
+
+        $hbox->setBounds(new Rect(0, 0, 200, 40));
+        $hbox->layout($this->style);
+
+        $this->assertEquals(160.0, $right->getBounds()->x);
+        $this->assertEquals(200.0, $right->getBounds()->right());
+    }
+
+    public function testFixedSizeStackMeasuresChildrenAgainstItsOwnBox(): void
+    {
+        // Stack's layout() already re-fits fill children to its bounds, but the
+        // size it hands down at measure time propagates into nested trees — so it
+        // has to be the stack's own box too.
+        $stack = new Stack();
+        $stack->size(Sizing::fixed(200, 100));
+        $fill = (new Label('fill'))->size(Sizing::fill());
+        $stack->addChild($fill);
+
+        $stack->measure(800, 600, $this->style);
+
+        $this->assertEquals(200.0, $fill->getMeasuredWidth());
+        $this->assertEquals(100.0, $fill->getMeasuredHeight());
+    }
+
+    public function testMaxHeightAlsoCapsWhatChildrenAreOffered(): void
+    {
+        $vbox = new VBox(spacing: 0.0);
+        $vbox->sizing = new Sizing(maxHeight: 200.0);
+        $gap  = new Spacer();
+        $vbox->addChild($gap);
+
+        $vbox->measure(400, 600, $this->style);
+
+        $this->assertEquals(200.0, $gap->getMeasuredHeight());
+    }
+
+    public function testFixedSizeContainersStillClampToTheAvailableSpace(): void
+    {
+        // A box asking for more than it can have must not hand its children the
+        // fantasy size — the fill child gets what is actually left on screen.
+        $vbox = new VBox(spacing: 0.0);
+        $vbox->size(Sizing::fixed(100, 800));
+        $gap  = new Spacer();
+        $foot = (new Label('foot'))->size(Sizing::fixed(100, 40));
+        $vbox->addChild($gap)->addChild($foot);
+
+        $vbox->measure(400, 300, $this->style);
+
+        $this->assertEquals(260.0, $gap->getMeasuredHeight());
+    }
 }

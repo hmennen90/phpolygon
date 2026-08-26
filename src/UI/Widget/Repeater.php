@@ -79,8 +79,14 @@ class Repeater extends VBox
 
         // Horizontal (HBox-style) measurement of the expanded items.
         $style = $this->resolveStyle($style);
-        $contentW = $availableWidth - $this->padding->horizontal();
-        $contentH = $availableHeight - $this->padding->vertical();
+        $contentW = $this->innerExtent(
+            $this->sizing->width, $this->sizing->maxWidth, $this->sizing->fillWidth,
+            $availableWidth, $this->padding->horizontal(),
+        );
+        $contentH = $this->innerExtent(
+            $this->sizing->height, $this->sizing->maxHeight, $this->sizing->fillHeight,
+            $availableHeight, $this->padding->vertical(),
+        );
 
         $totalWidth = 0.0;
         $maxHeight = 0.0;

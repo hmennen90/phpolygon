@@ -27,8 +27,14 @@ class Panel extends Widget
     {
         $style = $this->resolveStyle($style);
         $titleH = $this->title !== '' ? $style->fontSize + $this->padding->vertical() : 0.0;
-        $contentW = $availableWidth - $this->padding->horizontal();
-        $contentH = $availableHeight - $this->padding->vertical() - $titleH;
+        $contentW = $this->innerExtent(
+            $this->sizing->width, $this->sizing->maxWidth, $this->sizing->fillWidth,
+            $availableWidth, $this->padding->horizontal(),
+        );
+        $contentH = $this->innerExtent(
+            $this->sizing->height, $this->sizing->maxHeight, $this->sizing->fillHeight,
+            $availableHeight, $this->padding->vertical(),
+        ) - $titleH;
 
         $maxW = 0.0;
         $totalH = 0.0;

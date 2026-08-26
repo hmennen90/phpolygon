@@ -44,7 +44,10 @@ class ScrollView extends Widget
     public function measure(float $availableWidth, float $availableHeight, UIStyle $style): void
     {
         $style = $this->resolveStyle($style);
-        $contentW = $availableWidth - $this->padding->horizontal();
+        $contentW = $this->innerExtent(
+            $this->sizing->width, $this->sizing->maxWidth, $this->sizing->fillWidth,
+            $availableWidth, $this->padding->horizontal(),
+        );
 
         $totalH = 0.0;
         foreach ($this->children as $child) {

@@ -215,6 +215,43 @@ abstract class Widget
     }
 
     /**
+     * Room this container has to offer its children along one axis, at measure
+     * time — the measure-time counterpart of {@see contentRect()}.
+     *
+     * A container with an explicit size (or a maximum) on that axis is making a
+     * promise about how much room its children get. Handing them the parent's
+     * available extent instead breaks it: a fill child claims the whole
+     * remaining viewport and every sibling after it is laid out beyond the
+     * container's own bounds — drawn outside the box and unreachable by the
+     * pointer. The explicit size still cannot exceed what the parent can
+     * actually give, so it is clamped to the available extent.
+     *
+     * @param  float  $fixed  the sizing's explicit extent on this axis (0 = none)
+     * @param  float  $max  the sizing's maximum extent on this axis
+     * @param  bool  $fill  whether the sizing fills the parent on this axis
+     * @param  float  $available  the extent the parent is offering
+     * @param  float  $padding  this widget's padding along the axis
+     */
+    protected function innerExtent(
+        float $fixed,
+        float $max,
+        bool $fill,
+        float $available,
+        float $padding,
+    ): float {
+        $extent = $available;
+        if (! $fill) {
+            if ($fixed > 0.0) {
+                $extent = min($fixed, $available);
+            } elseif ($max < PHP_FLOAT_MAX) {
+                $extent = min($max, $available);
+            }
+        }
+
+        return max(0.0, $extent - $padding);
+    }
+
+    /**
      * Return the content area (bounds minus padding).
      */
     public function contentRect(): Rect
