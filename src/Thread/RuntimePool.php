@@ -91,13 +91,16 @@ final class RuntimePool
      * `parallel` rethrows it on the joining thread with its original type and
      * message intact, so a bug in a worker looks like a bug, not like a hang.
      *
-     * @template TItem
-     * @template TResult
-     * @param  list<TItem>                       $items      One job per entry.
-     * @param  \Closure(TItem, mixed...):TResult $task       Static closure; see class docblock.
-     * @param  list<mixed>                       $sharedArgs Appended to every call. Copied per
-     *                                                       job — keep them small or packed.
-     * @return list<TResult>
+     * The task is called as `$task($item, ...$sharedArgs)`. Its signature is
+     * deliberately left untyped here: a native callable type cannot express
+     * "one item plus this call's own required extra parameters", and pinning one
+     * would reject every caller that uses $sharedArgs.
+     *
+     * @param  list<mixed> $items      One job per entry.
+     * @param  \Closure    $task       Static closure; see the class docblock.
+     * @param  list<mixed> $sharedArgs Appended to every call. Copied per job —
+     *                                 keep them small or packed.
+     * @return list<mixed> One result per item, in input order.
      */
     public function map(array $items, \Closure $task, array $sharedArgs = []): array
     {
