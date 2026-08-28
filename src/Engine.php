@@ -56,6 +56,7 @@ use PHPolygon\Scene\Transpiler\WorldExporter;
 use PHPolygon\Scene\Transpiler\WorldImporter;
 use PHPolygon\Support\Facades\Facade;
 use PHPolygon\Thread\NullThreadScheduler;
+use PHPolygon\Thread\RuntimePool;
 use PHPolygon\Thread\ThreadScheduler;
 use PHPolygon\Thread\ThreadSchedulerFactory;
 use PHPolygon\UI\PerfOverlay;
@@ -2053,6 +2054,9 @@ class Engine
     {
         self::log('Shutting down...');
         $this->scheduler->shutdown();
+        // Load-time fork/join workers (bakes, asset rasterisation) are pooled and
+        // outlive the job that spawned them, so they need joining here too.
+        RuntimePool::closeShared();
         $this->audio->dispose();
         $this->textures->clear();
         $this->world->clear();

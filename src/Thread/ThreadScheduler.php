@@ -53,9 +53,8 @@ class ThreadScheduler
             // A parallel Runtime starts a fresh thread with NO autoloader, so it
             // can only resolve $class::threadEntry() if bootstrapped with the
             // active Composer autoloader. Without it, get_class() names a class the
-            // worker thread cannot load (fatal). Resolve the loaded autoloader's
-            // path so this works both standalone and as a Composer dependency.
-            $bootstrap = self::autoloadBootstrap();
+            // worker thread cannot load (fatal).
+            $bootstrap = ParallelCapability::autoloadBootstrap();
             $runtime = $bootstrap !== null
                 ? new \parallel\Runtime($bootstrap)
                 : new \parallel\Runtime();
@@ -155,30 +154,6 @@ class ThreadScheduler
 
         $this->runtimes = [];
         $this->booted = false;
-    }
-
-    /**
-     * Path to the active Composer autoloader, used to bootstrap worker Runtimes
-     * so they can autoload subsystem classes. Resolved from the loaded
-     * {@see \Composer\Autoload\ClassLoader} (vendor/composer/ClassLoader.php →
-     * vendor/autoload.php), so it points at the real vendor dir whether the
-     * engine runs standalone or as a dependency. Null if no Composer autoloader
-     * is present (e.g. a bundled PHAR with a custom loader).
-     */
-    private static function autoloadBootstrap(): ?string
-    {
-        if (!class_exists(\Composer\Autoload\ClassLoader::class, false)) {
-            return null;
-        }
-
-        $file = (new \ReflectionClass(\Composer\Autoload\ClassLoader::class))->getFileName();
-        if ($file === false) {
-            return null;
-        }
-
-        $autoload = dirname($file, 2) . '/autoload.php';
-
-        return is_file($autoload) ? $autoload : null;
     }
 
     public function isBooted(): bool

@@ -75,4 +75,44 @@ final class ParallelCapability
 
         return self::isAvailable() ? ThreadingMode::MultiThreaded : ThreadingMode::SingleThreaded;
     }
+
+    /**
+     * Path to the active Composer autoloader, used to bootstrap worker Runtimes
+     * so they can autoload engine/game classes. A parallel Runtime starts a fresh
+     * thread with NO autoloader, so without this a worker cannot resolve any
+     * class by name (fatal). Resolved from the loaded {@see \Composer\Autoload\ClassLoader}
+     * (vendor/composer/ClassLoader.php → vendor/autoload.php), so it points at the
+     * real vendor dir whether the engine runs standalone or as a dependency.
+     *
+     * Null when no Composer autoloader is present (e.g. a bundled PHAR with a
+     * custom loader) — callers then spawn an unbootstrapped Runtime, which is
+     * only safe for closures that touch no project classes.
+     *
+     * Resolving this costs a reflection lookup, so the result is memoised: it
+     * cannot change within a process.
+     */
+    public static function autoloadBootstrap(): ?string
+    {
+        if (self::$bootstrapResolved) {
+            return self::$bootstrap;
+        }
+        self::$bootstrapResolved = true;
+
+        if (!class_exists(\Composer\Autoload\ClassLoader::class, false)) {
+            return self::$bootstrap = null;
+        }
+
+        $file = (new \ReflectionClass(\Composer\Autoload\ClassLoader::class))->getFileName();
+        if ($file === false) {
+            return self::$bootstrap = null;
+        }
+
+        $autoload = dirname($file, 2) . '/autoload.php';
+
+        return self::$bootstrap = is_file($autoload) ? $autoload : null;
+    }
+
+    private static ?string $bootstrap = null;
+
+    private static bool $bootstrapResolved = false;
 }
