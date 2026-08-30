@@ -603,7 +603,7 @@ class VioRenderer2D implements Renderer2DInterface
         // box. The chain-aware width here matches what measureTextBox() reports.
         $lineWidth = fn (string $s): float => $this->measureTextWithChain($chain, $s)->width;
 
-        foreach (self::wrapTextLines($text, $breakWidth, $lineWidth) as $line) {
+        foreach (TextWrap::lines($text, $breakWidth, $lineWidth) as $line) {
             if ($line !== '') {
                 $lx = $x;
                 if ($align & TextAlign::CENTER) {
@@ -619,50 +619,6 @@ class VioRenderer2D implements Renderer2DInterface
         }
     }
 
-    /**
-     * Greedy word-wrap $text into rendered lines at $breakWidth. Hard line
-     * breaks (\r\n / \r / \n) always split; an empty paragraph yields a ''
-     * entry (a blank line). $lineWidth measures a candidate line — pass a
-     * chain-aware measurer so wrapping agrees with what drawTextBox() renders.
-     * A single word wider than $breakWidth is kept on its own line (never split).
-     *
-     * @param  callable(string): float  $lineWidth
-     * @return list<string>
-     */
-    private static function wrapTextLines(string $text, float $breakWidth, callable $lineWidth): array
-    {
-        // Split on hard line breaks first so an explicit \n forces a new line;
-        // word-wrap then runs within each paragraph. Without this "…X = 5\n20…"
-        // would render as one line (explode(' ') keeps \n inside a token).
-        $paragraphs = preg_split('/\r\n?|\n/', $text);
-        if ($paragraphs === false) {
-            $paragraphs = [$text];
-        }
-
-        $lines = [];
-        foreach ($paragraphs as $paragraph) {
-            if ($paragraph === '') {
-                $lines[] = '';
-                continue;
-            }
-
-            $line = '';
-            foreach (explode(' ', $paragraph) as $word) {
-                $testLine = $line === '' ? $word : $line . ' ' . $word;
-                if ($line !== '' && $lineWidth($testLine) > $breakWidth) {
-                    $lines[] = $line;
-                    $line = $word;
-                } else {
-                    $line = $testLine;
-                }
-            }
-            if ($line !== '') {
-                $lines[] = $line;
-            }
-        }
-
-        return $lines;
-    }
 
     public function drawSprite(Texture $texture, ?Rect $srcRegion, float $x, float $y, float $w, float $h, float $opacity = 1.0): void
     {
@@ -1087,7 +1043,7 @@ class VioRenderer2D implements Renderer2DInterface
         $lineHeight = $size * 1.2;
         $lineWidth = fn (string $s): float => $this->measureTextWithChain($chain, $s)->width;
 
-        $lines = self::wrapTextLines($text, $breakWidth, $lineWidth);
+        $lines = TextWrap::lines($text, $breakWidth, $lineWidth);
         $maxWidth = 0.0;
         foreach ($lines as $line) {
             if ($line !== '') {

@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace PHPolygon\Tests\Rendering;
 
-use PHPolygon\Rendering\VioRenderer2D;
+use PHPolygon\Rendering\TextWrap;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 
 /**
- * Covers VioRenderer2D::wrapTextLines(), the pure word-wrap shared by
- * drawTextBox() and measureTextBox() so both agree on line breaks. It is
- * exercised through its $lineWidth callable (the chain-aware measurer the live
- * path supplies) without a VioContext.
+ * Covers the line breaking behind VioRenderer2D::drawTextBox() and
+ * measureTextBox(), so both agree on where a line ends. It is exercised
+ * through the $lineWidth callable (the chain-aware measurer the live path
+ * supplies) without a VioContext.
+ *
+ * The rules themselves now live in {@see TextWrap}, shared with GdRenderer2D;
+ * {@see TextWrapTest} covers them directly, including the CJK break
+ * opportunities this file predates. What stays interesting here is the
+ * CHAIN-AWARE measurer below - that part is specific to this renderer.
  *
  * The regression it guards: drawTextBox() used to wrap with a single-primary
  * measurer, so a CJK/Arabic body measured to ~0 in the primary and never
@@ -27,12 +31,7 @@ final class VioRenderer2DWrapTest extends TestCase
      */
     private static function wrap(string $text, float $breakWidth, callable $lineWidth): array
     {
-        $m = new ReflectionMethod(VioRenderer2D::class, 'wrapTextLines');
-
-        /** @var list<string> $lines */
-        $lines = $m->invoke(null, $text, $breakWidth, $lineWidth);
-
-        return $lines;
+        return TextWrap::lines($text, $breakWidth, $lineWidth);
     }
 
     /** One unit per character. */

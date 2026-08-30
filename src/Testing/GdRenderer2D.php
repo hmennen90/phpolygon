@@ -13,6 +13,7 @@ use PHPolygon\Rendering\Renderer2DInterface;
 use PHPolygon\Rendering\Script;
 use PHPolygon\Rendering\TextAlign;
 use PHPolygon\Rendering\TextMetrics;
+use PHPolygon\Rendering\TextWrap;
 use PHPolygon\Rendering\Texture;
 
 /**
@@ -270,40 +271,29 @@ class GdRenderer2D implements Renderer2DInterface
         $lineY = $y;
         $lineHeight = $size * 1.4;
 
-        // Split on hard line breaks first; word-wrap runs within each paragraph.
-        $paragraphs = preg_split('/\r\n?|\n/', $text);
-        if ($paragraphs === false) {
-            $paragraphs = [$text];
-        }
-
-        foreach ($paragraphs as $paragraph) {
-            if ($paragraph === '') {
-                $lineY += $lineHeight;
-                continue;
-            }
-
-            $words = explode(' ', $paragraph);
-            $line = '';
-
-            foreach ($words as $word) {
-                $testLine = $line === '' ? $word : $line . ' ' . $word;
-                $bbox = imagettfbbox($size, 0, $fontPath, $testLine);
-                /** @var array<int, int>|false $bbox */
-                $lineWidth = $bbox !== false ? ($bbox[2] - $bbox[0]) : 0;
-
-                if ($lineWidth > $breakWidth && $line !== '') {
-                    $this->drawText($line, $x, $lineY, $size, $color);
-                    $line = $word;
-                    $lineY += $lineHeight;
-                } else {
-                    $line = $testLine;
-                }
-            }
+        // Line breaking lives in TextWrap, shared with VioRenderer2D. Splitting
+        // on spaces alone gave Japanese and Chinese no break opportunity at all,
+        // so a line longer than the box simply ran past its edge.
+        foreach (TextWrap::lines($text, $breakWidth, $this->lineMeasurer($size, $fontPath)) as $line) {
             if ($line !== '') {
                 $this->drawText($line, $x, $lineY, $size, $color);
-                $lineY += $lineHeight;
             }
+            $lineY += $lineHeight;
         }
+    }
+
+    /**
+     * A width measurer bound to one font and size, for {@see TextWrap}.
+     *
+     * @return callable(string): float
+     */
+    private function lineMeasurer(float $size, string $fontPath): callable
+    {
+        return static function (string $s) use ($size, $fontPath): float {
+            $bbox = imagettfbbox($size, 0, $fontPath, $s);
+            /** @var array<int, int>|false $bbox */
+            return $bbox !== false ? (float) ($bbox[2] - $bbox[0]) : 0.0;
+        };
     }
 
     public function drawSprite(Texture $texture, ?Rect $srcRegion, float $x, float $y, float $w, float $h, float $opacity = 1.0): void
@@ -397,46 +387,13 @@ class GdRenderer2D implements Renderer2DInterface
         $maxWidth = 0.0;
         $totalHeight = 0.0;
 
-        $paragraphs = preg_split('/\r\n?|\n/', $text);
-        if ($paragraphs === false) {
-            $paragraphs = [$text];
-        }
-
-        foreach ($paragraphs as $paragraph) {
-            if ($paragraph === '') {
-                $totalHeight += $lineHeight;
-                continue;
-            }
-
-            $words = explode(' ', $paragraph);
-            $line = '';
-
-            foreach ($words as $word) {
-                $testLine = $line === '' ? $word : $line . ' ' . $word;
-                $bbox = imagettfbbox($size, 0, $fontPath, $testLine);
-                /** @var array<int, int>|false $bbox */
-                $lineWidth = $bbox !== false ? (float)($bbox[2] - $bbox[0]) : 0.0;
-
-                if ($lineWidth > $breakWidth && $line !== '') {
-                    /** @var array<int, int>|false $lineBbox */
-                    $lineBbox = imagettfbbox($size, 0, $fontPath, $line);
-                    if ($lineBbox !== false) {
-                        $maxWidth = max($maxWidth, (float)($lineBbox[2] - $lineBbox[0]));
-                    }
-                    $totalHeight += $lineHeight;
-                    $line = $word;
-                } else {
-                    $line = $testLine;
-                }
-            }
+        // Same wrap as drawTextBox(), so the reported box matches what is drawn.
+        $measure = $this->lineMeasurer($size, $fontPath);
+        foreach (TextWrap::lines($text, $breakWidth, $measure) as $line) {
             if ($line !== '') {
-                /** @var array<int, int>|false $lineBbox */
-                $lineBbox = imagettfbbox($size, 0, $fontPath, $line);
-                if ($lineBbox !== false) {
-                    $maxWidth = max($maxWidth, (float)($lineBbox[2] - $lineBbox[0]));
-                }
-                $totalHeight += $lineHeight;
+                $maxWidth = max($maxWidth, $measure($line));
             }
+            $totalHeight += $lineHeight;
         }
 
         return new TextMetrics($maxWidth, $totalHeight);
