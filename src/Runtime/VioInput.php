@@ -36,6 +36,16 @@ class VioInput implements InputInterface
     /** @var list<string> Characters typed this frame */
     private array $charBuffer = [];
 
+    /**
+     * @var array<int, bool> Auto-repeat edges from a held key (GLFW_REPEAT).
+     *
+     * Held SEPARATE from $keyJustPressed on purpose. Mixing them would make a
+     * held key fire every gameplay action that reads isKeyPressed() - jump,
+     * interact, skip - once the OS repeat kicks in. Only text editing wants
+     * repeats, and it asks for them via isKeyTyped().
+     */
+    private array $keyRepeated = [];
+
     /** Cached scroll deltas — snapshot taken before vio_begin resets them */
     private float $cachedScrollX = 0.0;
     private float $cachedScrollY = 0.0;
@@ -66,6 +76,8 @@ class VioInput implements InputInterface
                 $this->keyJustPressed[$key] = true;
             } elseif ($action === 0) { // GLFW_RELEASE
                 $this->keyJustReleased[$key] = true;
+            } elseif ($action === 2) { // GLFW_REPEAT
+                $this->keyRepeated[$key] = true;
             }
         });
 
@@ -92,6 +104,53 @@ class VioInput implements InputInterface
             return true;
         }
         return false;
+    }
+
+    /**
+     * A press OR an auto-repeat from holding the key - what TEXT EDITING wants.
+     *
+     * isKeyPressed() reports the physical press once and nothing more, so a
+     * held backspace deletes exactly one character and a held arrow moves the
+     * caret once. Editing a line of code then means tapping twenty times.
+     * This reports the OS repeat too, at the rate the OS chose, which is the
+     * rate every other text field on the machine uses.
+     *
+     * Deliberately NOT folded into isKeyPressed(): gameplay reads that one, and
+     * a held key must not re-trigger a jump or an interaction.
+     */
+    public function isKeyTyped(int $key): bool
+    {
+        if ($this->ctx === null || $this->isSuppressed()) {
+            return false;
+        }
+
+        return $this->consumeTypedEdge($key);
+    }
+
+    /**
+     * The edge bookkeeping behind {@see isKeyTyped()}, without the context and
+     * suppression gates.
+     *
+     * Split out so it can be tested: VioContext comes from the php-vio
+     * extension and cannot be constructed or stubbed in a unit test, which
+     * would otherwise leave the interesting half - press and repeat collapsing
+     * into ONE typed event, both consumed on read - covered by nothing.
+     *
+     * @internal
+     */
+    public function consumeTypedEdge(int $key): bool
+    {
+        $typed = false;
+        if ($this->keyJustPressed[$key] ?? false) {
+            unset($this->keyJustPressed[$key]);
+            $typed = true;
+        }
+        if ($this->keyRepeated[$key] ?? false) {
+            unset($this->keyRepeated[$key]);
+            $typed = true;
+        }
+
+        return $typed;
     }
 
     public function isKeyReleased(int $key): bool
@@ -244,6 +303,7 @@ class VioInput implements InputInterface
     {
         $this->keyJustPressed = [];
         $this->keyJustReleased = [];
+        $this->keyRepeated = [];
     }
 
     public function endFrame(): void

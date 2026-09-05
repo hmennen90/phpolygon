@@ -25,6 +25,16 @@ interface InputInterface
     /** True only on the first frame the key is pressed (edge detection). */
     public function isKeyPressed(int $key): bool;
 
+    /**
+     * A press OR an auto-repeat from holding the key - for TEXT EDITING.
+     *
+     * isKeyPressed() reports one press and nothing more, so a held backspace
+     * deletes a single character. Text fields want the OS repeat rate instead,
+     * the same one every other text field on the machine uses. Gameplay keeps
+     * reading isKeyPressed(), so a held key never re-triggers a jump.
+     */
+    public function isKeyTyped(int $key): bool;
+
     /** True only on the first frame the key is released (edge detection). */
     public function isKeyReleased(int $key): bool;
 

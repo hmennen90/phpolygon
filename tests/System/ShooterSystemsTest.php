@@ -260,6 +260,12 @@ final class FakeShooterInput implements InputInterface
 
     public function isKeyDown(int $key): bool { return $this->down[$key] ?? false; }
     public function isKeyPressed(int $key): bool { return false; }
+    /** No auto-repeat in the double - a press is a press. */
+    public function isKeyTyped(int $key): bool
+    {
+        return $this->isKeyPressed($key);
+    }
+
     public function isKeyReleased(int $key): bool { return false; }
     public function isMouseButtonDown(int $button): bool { return $this->mouse[$button] ?? false; }
     public function isMouseButtonPressed(int $button): bool { return false; }

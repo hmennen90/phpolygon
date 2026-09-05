@@ -120,6 +120,12 @@ class WidgetTreeTest extends TestCase
                 return false;
             }
 
+            /** No auto-repeat in the double - a press is a press. */
+            public function isKeyTyped(int $key): bool
+            {
+                return false;
+            }
+
             public function isKeyReleased(int $key): bool
             {
                 return false;

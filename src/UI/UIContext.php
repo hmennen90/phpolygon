@@ -607,11 +607,13 @@ class UIContext
                 $this->textFieldCursor++;
             }
             // Backspace (GLFW_KEY_BACKSPACE = 259)
-            if ($this->input->isKeyDown(259) && $this->input->isKeyReleased(259) && $this->textFieldCursor > 0 && !$this->input->isSuppressed()) {
+            // isKeyTyped statt isKeyPressed: eine gehaltene Ruecktaste soll
+            // loeschen, solange sie gehalten wird, und zwar mit der
+            // Wiederholrate des Systems.
+            if ($this->input->isKeyTyped(259) && $this->textFieldCursor > 0) {
                 $this->textFieldBuffer = mb_substr($this->textFieldBuffer, 0, $this->textFieldCursor - 1)
                     . mb_substr($this->textFieldBuffer, $this->textFieldCursor);
                 $this->textFieldCursor--;
-                $this->input->suppress(1, 0.1);
             }
 
             // On-screen-keyboard backspaces (iOS): no physical key edge, so the
@@ -623,16 +625,16 @@ class UIContext
             }
 
             // Delete (GLFW_KEY_DELETE = 261)
-            if ($this->input->isKeyPressed(261) && $this->textFieldCursor < mb_strlen($this->textFieldBuffer)) {
+            if ($this->input->isKeyTyped(261) && $this->textFieldCursor < mb_strlen($this->textFieldBuffer)) {
                 $this->textFieldBuffer = mb_substr($this->textFieldBuffer, 0, $this->textFieldCursor)
                     . mb_substr($this->textFieldBuffer, $this->textFieldCursor + 1);
             }
 
             // Arrow keys (LEFT = 263, RIGHT = 262)
-            if ($this->input->isKeyPressed(263) && $this->textFieldCursor > 0) {
+            if ($this->input->isKeyTyped(263) && $this->textFieldCursor > 0) {
                 $this->textFieldCursor--;
             }
-            if ($this->input->isKeyPressed(262) && $this->textFieldCursor < mb_strlen($this->textFieldBuffer)) {
+            if ($this->input->isKeyTyped(262) && $this->textFieldCursor < mb_strlen($this->textFieldBuffer)) {
                 $this->textFieldCursor++;
             }
 
@@ -716,15 +718,14 @@ class UIContext
                 $cur++;
             }
             // Enter / keypad enter → newline
-            if ($this->input->isKeyPressed(257) || $this->input->isKeyPressed(335)) {
+            if ($this->input->isKeyTyped(257) || $this->input->isKeyTyped(335)) {
                 $buf = mb_substr($buf, 0, $cur) . "\n" . mb_substr($buf, $cur);
                 $cur++;
             }
             // Backspace (259)
-            if ($this->input->isKeyDown(259) && $this->input->isKeyReleased(259) && $cur > 0 && !$this->input->isSuppressed()) {
+            if ($this->input->isKeyTyped(259) && $cur > 0) {
                 $buf = mb_substr($buf, 0, $cur - 1) . mb_substr($buf, $cur);
                 $cur--;
-                $this->input->suppress(1, 0.1);
             }
             // On-screen-keyboard backspaces (iOS): delivered as a per-frame count.
             for ($bs = $this->input->getBackspaceCount(); $bs > 0 && $cur > 0; $bs--) {
@@ -732,21 +733,21 @@ class UIContext
                 $cur--;
             }
             // Delete (261)
-            if ($this->input->isKeyPressed(261) && $cur < mb_strlen($buf)) {
+            if ($this->input->isKeyTyped(261) && $cur < mb_strlen($buf)) {
                 $buf = mb_substr($buf, 0, $cur) . mb_substr($buf, $cur + 1);
             }
             // Left / Right (263 / 262)
-            if ($this->input->isKeyPressed(263) && $cur > 0) {
+            if ($this->input->isKeyTyped(263) && $cur > 0) {
                 $cur--;
             }
-            if ($this->input->isKeyPressed(262) && $cur < mb_strlen($buf)) {
+            if ($this->input->isKeyTyped(262) && $cur < mb_strlen($buf)) {
                 $cur++;
             }
             // Up / Down (265 / 264) — keep the column on the neighbouring line.
-            if ($this->input->isKeyPressed(265)) {
+            if ($this->input->isKeyTyped(265)) {
                 $cur = $this->moveCaretVertically($buf, $cur, -1);
             }
-            if ($this->input->isKeyPressed(264)) {
+            if ($this->input->isKeyTyped(264)) {
                 $cur = $this->moveCaretVertically($buf, $cur, 1);
             }
 
@@ -1281,3 +1282,4 @@ class UIContext
         }
     }
 }
+

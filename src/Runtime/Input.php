@@ -94,6 +94,16 @@ class Input implements InputInterface
         return (bool)($this->keyPressedThisFrame[$key] ?? false);
     }
 
+    /**
+     * Ohne Fensterschicht gibt es keine Auto-Wiederholung - eine gehaltene
+     * Taste meldet hier nur ihren Druck. Verhaelt sich damit wie bisher, statt
+     * zu behaupten, es koenne etwas, das es nicht kann.
+     */
+    public function isKeyTyped(int $key): bool
+    {
+        return $this->isKeyPressed($key);
+    }
+
     public function isKeyReleased(int $key): bool
     {
         if ($this->isSuppressed()) {

@@ -234,6 +234,12 @@ final class FakeInput implements InputInterface
         return $key === $this->pressedKey;
     }
 
+    /** No auto-repeat in the double - a press is a press. */
+    public function isKeyTyped(int $key): bool
+    {
+        return $this->isKeyPressed($key);
+    }
+
     public function isKeyReleased(int $key): bool
     {
         return false;
