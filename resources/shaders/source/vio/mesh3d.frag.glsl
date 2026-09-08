@@ -89,6 +89,9 @@ uniform float u_ft_ao;
 // reflections; u_has_environment_map gates it. Parity with the OpenGL copy.
 uniform samplerCube u_environment_map;
 uniform int   u_has_environment_map;
+// Last mip level of u_environment_map (0 when the probe has no mip chain).
+// Lets surfaces pick a roughness-appropriate LOD via textureLod().
+uniform float u_env_mip_max;
 // Baked COLOURED irradiance probe field (RGB SH-L1, with 1-bounce). One 3D
 // texture per channel; RGBA = signed-encoded coeffs (c0,c1,c2,c3) over
 // [-u_probe_range, +u_probe_range]. Per channel: E = c0 + c1*n.x + c2*n.y + c3*n.z.

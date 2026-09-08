@@ -93,7 +93,7 @@ trait VisualTestCase
      * Assert that a raw RGBA byte buffer (top-down, width*height*4) matches the
      * reference snapshot. This is the backend-agnostic entry point for GPU
      * read-back VRT: feed it the bytes from a native renderer's off-screen read
-     * (e.g. MetalRenderer3D::renderToImage()). A platform/backend suffix is
+     * (e.g. VioRenderer3D::renderToImage()). A platform/backend suffix is
      * appended (Metal ≠ WARP ≠ lavapipe never share a baseline), so pass a
      * distinct $backend like 'metal'.
      *

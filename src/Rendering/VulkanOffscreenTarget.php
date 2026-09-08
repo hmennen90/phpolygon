@@ -17,7 +17,7 @@ use Vk\RenderPass;
  *
  * Owns the colour image, depth image, and (when MSAA is on) the resolve image
  * plus a matching VkRenderPass + VkFramebuffer pair. Mirrors the semantics of
- * `OpenGLOffscreenTarget` and `MetalOffscreenTarget`.
+ * `OpenGLOffscreenTarget` and `VioOffscreenTarget`.
  *
  * MSAA support is probed lazily: the first time a sample-count > 1 resize is
  * requested, the helper attempts to create a multisample colour image, depth

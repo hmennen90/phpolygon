@@ -6,6 +6,5 @@ parameters:
         - src/Rendering/VulkanRenderer3D.php
     scanFiles:
         - stubs/vulkan.stub.php
-        - stubs/metal.stub.php
         - stubs/vio.stub.php
         - stubs/glfw.stub.php

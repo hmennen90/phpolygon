@@ -97,8 +97,8 @@ Game Code / Scene
 RenderCommandList        ← pure PHP data, no GPU calls
       ↓  (executed by)
 ┌───────────────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐
-VioRenderer3D   OpenGLRenderer3D   VulkanRenderer3D   MetalRenderer3D   NullRenderer3D
-(primary)       (fallback)         (native Vulkan)    (MoltenVK/macOS)  (headless/tests)
+VioRenderer3D   OpenGLRenderer3D   VulkanRenderer3D   NullRenderer3D
+(primary)       (fallback)         (native Vulkan)    (headless/tests)
 ```
 
 **Do not design `Renderer3DInterface` around the OpenGL state-machine model.**
@@ -189,11 +189,11 @@ shader does not declare are silently ignored — a minimal shader only needs
 | OpenGL via php-glfw (2D/NanoVG) | Fallback | 2D games when php-vio unavailable (GL 3.0–4.6 ladder) |
 | OpenGL via php-glfw (3D) | Fallback | 3D games when php-vio unavailable (GL 3.0–4.6 ladder, feature-tiered) |
 | Vulkan via php-vulkan | Standalone | 3D native Vulkan backend, used when vio is not loaded |
-| Metal via php-metal | Standalone | 3D native Metal backend on macOS, used when vio is not loaded |
 
-vio is the production path on every platform. The standalone Metal / Vulkan / OpenGL
-backends exist for environments where vio is unavailable (older PHP builds, CI
-without GPU, headless tooling) or when a game explicitly opts into a native
+vio is the production path on every platform — on macOS vio's own Metal backend
+(php-metal-gpu / `MetalRenderer3D` were retired once it reached parity). The standalone
+Vulkan / OpenGL backends exist for environments where vio is unavailable (older PHP
+builds, CI without GPU, headless tooling) or when a game explicitly opts into a native
 backend via `EngineConfig::$useNative3D`. When extending the renderer (new
 features, post-effects, render-target work), prioritise VioRenderer3D first
 because it reaches all GPUs including D3D11 / D3D12.
@@ -739,7 +739,7 @@ $engine = new Engine(new EngineConfig(headless: true));
 |---|---|---|
 | `VioWindow` | `Window` (GLFW) | `NullWindow` (no-op) |
 | `VioRenderer2D` | `Renderer2D` (NanoVG) | `NullRenderer2D` (no-op) |
-| `VioRenderer3D` | `OpenGLRenderer3D` / `VulkanRenderer3D` / `MetalRenderer3D` | `NullRenderer3D` (no-op) |
+| `VioRenderer3D` | `OpenGLRenderer3D` / `VulkanRenderer3D` | `NullRenderer3D` (no-op) |
 | `VioTextureManager` | `TextureManager` (GL) | `NullTextureManager` (dummy) |
 | `VioAudioBackend` | `GLFWAudioBackend` | `null` (no audio) |
 | `VioInput` | `Input` (GLFW callbacks) | `Input` (no-op) |

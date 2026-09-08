@@ -25,11 +25,10 @@ use PHPolygon\Rendering\VioRenderer3D;
  * The generic vio path for 3D pixel VRT — the same code runs on D3D11/D3D12
  * (WARP on Windows), Vulkan (lavapipe on Linux) and OpenGL.
  *
- * Only the clear + read-back plumbing is asserted here, because it is the one
- * thing that holds on *every* vio backend: geometry rendering needs a wired 3D
- * pipeline (present on D3D12 / Vulkan / OpenGL, stubbed on vio-Metal), so a
- * cross-backend test can't assume the box appears. Full-geometry snapshots are
- * a per-backend concern taken on the runner that has that backend.
+ * Asserts the clear + read-back plumbing AND that the lit box lands in the
+ * middle of the frame — every vio backend with a 3D pipeline (Metal, D3D11/12,
+ * OpenGL) renders geometry through renderToImage(). Full-image snapshots are a
+ * per-backend concern taken on the runner that has that backend.
  *
  * Skipped where the vio extension is absent.
  */
@@ -113,6 +112,15 @@ class VioRenderToImageTest extends TestCase
             self::assertEqualsWithDelta(26, $topLeft[0], 4, 'corner R (clear)');
             self::assertEqualsWithDelta(128, $topLeft[1], 4, 'corner G (clear)');
             self::assertEqualsWithDelta(229, $topLeft[2], 4, 'corner B (clear)');
+        }
+
+        // The box sits at the origin in front of the camera: with a 3D pipeline
+        // the frame centre must differ from the background (geometry rendered).
+        // renderToImage() draws into its own render target and reads THAT back,
+        // so this holds on Metal, D3D11/D3D12 and OpenGL alike.
+        if (vio_supports_feature($ctx, VIO_FEATURE_3D_PIPELINE)) {
+            $centre = $corner(intdiv($w, 2), intdiv($h, 2));
+            self::assertNotSame($topLeft, $centre, 'frame centre must show the box, not the background');
         }
     }
 }

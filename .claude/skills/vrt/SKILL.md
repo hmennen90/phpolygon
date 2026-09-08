@@ -1,6 +1,6 @@
 ---
 name: vrt
-description: PHPolygon Visual Regression Testing (VRT) & Test-Infrastruktur — 2D-Pixel-Snapshots (GdRenderer2D), Headless-3D-CommandList-Tests (NullRenderer3D), native 3D-Pixel-VRT (MetalRenderer3D/VioRenderer3D renderToImage), Docker-OpenGL-Versionsmatrix, GameTestCase fuer Spiele, Snapshot-Workflow. Nutze diesen Skill bei jeder Aenderung an Tests, Snapshots, VRT-Infrastruktur oder wenn Rendering visuell abgesichert werden soll.
+description: PHPolygon Visual Regression Testing (VRT) & Test-Infrastruktur — 2D-Pixel-Snapshots (GdRenderer2D), Headless-3D-CommandList-Tests (NullRenderer3D), native 3D-Pixel-VRT (VioRenderer3D renderToImage), Docker-OpenGL-Versionsmatrix, GameTestCase fuer Spiele, Snapshot-Workflow. Nutze diesen Skill bei jeder Aenderung an Tests, Snapshots, VRT-Infrastruktur oder wenn Rendering visuell abgesichert werden soll.
 ---
 
 # Skill: Visual Regression Testing (VRT) & Test-Infrastruktur
@@ -102,28 +102,20 @@ Fuer echte 3D-Pixel gibt es `renderToImage()` — rendert headless offscreen und
 liest den Framebuffer als RGBA zurueck. Vergleich ueber `assertRgbaScreenshot()`
 mit **per-Backend-Baseline** (Metal ≠ WARP ≠ lavapipe teilen nie eine Referenz).
 
-**macOS / Metal** (`ext-metal` / php-metal-gpu, voll verifiziert):
-```php
-$r = new MetalRenderer3D($w, $h, 0);           // Handle 0 = headless
-$rgba = $r->renderToImage($commandList, $w, $h, new Color(0.1, 0.5, 0.9));
-$this->assertRgbaScreenshot($rgba, $w, $h, 'scene', 'metal', maxDiffPixelRatio: 0.03);
-```
+**Alle Backends / vio** (macOS Metal, Windows D3D12/WARP, Linux Vulkan/lavapipe, OpenGL):
 
-**Generisch / vio** (D3D11/D3D12/Vulkan/OpenGL):
 ```php
 $ctx = vio_create('auto', ['width'=>$w,'height'=>$h,'headless'=>true,'vsync'=>false]);
 $rgba = (new VioRenderer3D($ctx, $w, $h))->renderToImage($commandList, $w, $h, $clear);
 ```
 
 Regeln & Grenzen:
-- Test mit `#[RequiresPhpExtension('metal')]` / `#[RequiresPhpExtension('vio')]`
-  (+ `#[RequiresOperatingSystem('Darwin')]` fuer Metal) gaten → skippt sonst.
-- **Geometrie** rendert nur auf Backends mit verdrahteter 3D-Pipeline:
-  D3D12 / Vulkan / OpenGL. **vio-Metal-3D ist gestubbt** → dort kommt nur die
-  Clear-Farbe zurueck (macOS 3D laeuft ueber den nativen `MetalRenderer3D`).
+- Test mit `#[RequiresPhpExtension('vio')]` gaten → skippt sonst.
+- **Geometrie** rendert auf jedem vio-Backend mit 3D-Pipeline (Metal, D3D11/D3D12,
+  OpenGL); `vio_read_render_target()` liest das Offscreen-Target direkt.
 - GPU-Output variiert je Modell → grosszuegige Toleranz statt exaktem Pixelmatch;
   bevorzugt strukturelle Asserts (Ecke = Clear, Zentrum = Geometrie) wo moeglich.
-- Beispiele: `tests/Rendering/MetalRenderToImageTest.php`, `VioRenderToImageTest.php`.
+- Beispiel: `tests/Rendering/VioRenderToImageTest.php`.
 
 ## Docker-OpenGL-Versionsmatrix (GL 3.0–4.6, GPU-frei)
 
@@ -156,7 +148,7 @@ docker run --rm -v "$(pwd)":/app -w /app phpolygon-vrt \
 
 | Job | Prueft |
 |-----|--------|
-| `tests` | PHPUnit (ohne `font-vrt`) auf ubuntu + macOS; best-effort `pie install` von php-metal-gpu → Metal-VRT laeuft auf macOS |
+| `tests` | PHPUnit (ohne `font-vrt`) auf ubuntu + macOS |
 | `tests-gpu` | php-glfw + xvfb, PHPUnit mit GPU |
 | `gl-matrix` | OpenGL-Versionsmatrix 3.0–4.6 (Mesa) |
 | `vrt` | Alpine-Container: `tests/Testing/` inkl. Fonts + Snapshot-Drift-Check |

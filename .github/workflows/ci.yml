@@ -30,22 +30,6 @@ jobs:
           coverage: none
           tools: pie
 
-      # Best-effort: build the native Metal extension so the macOS leg exercises
-      # the native-Metal pixel VRT (MetalRenderToImageTest). If it fails to
-      # build, the test skips via its #[RequiresPhpExtension('metal')] guard and
-      # the job stays green — hence continue-on-error.
-      - name: Install php-metal-gpu (macOS, best-effort)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        # pie builds + installs the .so but does not enable it, so append it to
-        # php.ini — only on install success (&&) so a failed build never writes a
-        # broken ini line. continue-on-error keeps the job green either way; the
-        # Metal VRT test skips via its RequiresPhpExtension guard when absent.
-        run: |
-          pie install hmennen90/php-metal-gpu:@dev \
-            && echo "extension=metal" >> "$(php -r 'echo php_ini_loaded_file();')" \
-            && php -m | grep -qi metal && echo "metal extension enabled"
-
       - name: Install Composer dependencies
         run: composer install --no-interaction --ignore-platform-reqs
 

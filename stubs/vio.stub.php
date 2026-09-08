@@ -31,6 +31,17 @@ const VIO_CULL_NONE = 0;
 const VIO_BLEND_NONE = 0;
 const VIO_BLEND_ALPHA = 1;
 const VIO_BLEND_ADDITIVE = 2;
+const VIO_BLEND_PREMULTIPLIED = 3;
+const VIO_BLEND_MULTIPLY = 4;
+const VIO_BLEND_SCREEN = 5;
+const VIO_BLEND_MIN = 6;
+const VIO_BLEND_MAX = 7;
+const VIO_COLOR_R = 1;
+const VIO_COLOR_G = 2;
+const VIO_COLOR_B = 4;
+const VIO_COLOR_A = 8;
+const VIO_COLOR_RGB = 7;
+const VIO_COLOR_RGBA = 15;
 const VIO_DEPTH_LEQUAL = 1;
 const VIO_DEPTH_LESS = 0;
 const VIO_FLOAT2 = 2;
@@ -45,6 +56,8 @@ const VIO_WRAP_CLAMP  = 1;
 const VIO_WRAP_MIRROR = 2;
 
 const VIO_FEATURE_TEXTURE_3D = 22;
+const VIO_FEATURE_RENDER_TARGET_CUBE = 23;
+const VIO_FEATURE_MIPMAP_GEN = 24;
 const VIO_FEATURE_COMPUTE = 1;
 const VIO_FEATURE_VERTEX_STORAGE = 30;
 
@@ -211,6 +224,7 @@ function vio_texture_3d(VioContext $ctx, array $desc): VioTexture|false {}
 
 /** @return array{int, int} */
 function vio_texture_size(VioTexture $tex): array {}
+function vio_texture_update(VioContext $ctx, VioTexture $tex, string $data, int $x = 0, int $y = 0, int $width = 0, int $height = 0): bool {}
 
 /**
  * Bind a texture to a sampler unit for 3D rendering.
@@ -247,7 +261,10 @@ function vio_bind_cubemap(VioContext $ctx, VioCubemap $cubemap, int $unit): void
  */
 function vio_render_target(VioContext $ctx, array $config): VioRenderTarget|false {}
 
-function vio_bind_render_target(VioContext $ctx, VioRenderTarget $target): void {}
+function vio_bind_render_target(VioContext $ctx, VioRenderTarget $target, int $face = -1, int $level = 0): void {}
+function vio_render_target_cubemap(VioRenderTarget $target): VioCubemap|false {}
+function vio_read_render_target(VioRenderTarget $target, int $face = -1): string|false {}
+function vio_generate_mipmaps(VioContext $ctx, VioRenderTarget|VioTexture|VioCubemap $object): bool {}
 
 function vio_unbind_render_target(VioContext $ctx): void {}
 

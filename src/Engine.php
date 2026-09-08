@@ -17,7 +17,6 @@ use PHPolygon\Rendering\Color;
 use PHPolygon\Rendering\GraphicsSettings;
 use PHPolygon\Rendering\GraphicsSettingsManager;
 use PHPolygon\Rendering\NullRenderer2D;
-use PHPolygon\Rendering\MetalRenderer3D;
 use PHPolygon\Rendering\TextAlign;
 use PHPolygon\Rendering\NullRenderer3D;
 use PHPolygon\Rendering\OpenGLRenderer3D;
@@ -724,9 +723,11 @@ class Engine
 
         // Create GPU-backed renderers after window is initialized (need graphics context)
         if (!$this->headless && $this->config->is3D) {
+            // 'metal' has no native renderer (php-vio's Metal backend replaced
+            // php-metal-gpu), so useNative3D cannot opt out of vio there.
             $useVioRenderer3D = $this->useVio
                 && $this->window instanceof VioWindow
-                && !$this->config->useNative3D;
+                && (!$this->config->useNative3D || $this->config->renderBackend3D === 'metal');
 
             if ($useVioRenderer3D) {
                 $this->renderer3D = new VioRenderer3D(
@@ -735,26 +736,16 @@ class Engine
                     $this->window->getFramebufferHeight(),
                 );
             } else {
-                // Native renderer path. Each backend takes a different
-                // shape of native handle — VulkanRenderer3D wraps an opaque
-                // object (php-vulkan SurfaceKHR), MetalRenderer3D needs an
-                // integer pointer to attach a CAMetalLayer. Compute the
-                // handle in the matching arm so the type is narrow.
+                // Native renderer path (Vulkan via php-vulkan, OpenGL via
+                // php-glfw). Metal has no standalone renderer any more: vio's
+                // Metal backend IS the macOS 3D path, so 'metal' here means
+                // "vio with the metal backend" and lands in VioRenderer3D above.
                 $this->renderer3D = match ($this->config->renderBackend3D) {
                     'vulkan' => new VulkanRenderer3D(
                         $this->window->getFramebufferWidth(),
                         $this->window->getFramebufferHeight(),
                         $this->window->getHandle(),
                     ),
-                    'metal' => $this->window instanceof VioWindow
-                        ? new MetalRenderer3D(
-                            $this->window->getFramebufferWidth(),
-                            $this->window->getFramebufferHeight(),
-                            vio_native_window_handle($this->window->getContext()),
-                        )
-                        : throw new \RuntimeException(
-                            'MetalRenderer3D requires a VioWindow to obtain the native NSWindow* handle'
-                        ),
                     default => new OpenGLRenderer3D(
                         $this->window->getFramebufferWidth(),
                         $this->window->getFramebufferHeight(),
@@ -2007,7 +1998,6 @@ class Engine
             $parts[] = match (true) {
                 $this->renderer3D instanceof VioRenderer3D => 'Vio 3D (' . ucfirst($this->getVioBackendName()) . ')',
                 $this->renderer3D instanceof VulkanRenderer3D => 'Vulkan',
-                $this->renderer3D instanceof MetalRenderer3D => 'Metal',
                 $this->renderer3D instanceof OpenGLRenderer3D => 'OpenGL 3D ('
                     . $this->renderer3D->capabilities()->major . '.'
                     . $this->renderer3D->capabilities()->minor . ')',

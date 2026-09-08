@@ -79,10 +79,10 @@ final class BackendConventions
      * so a render target authored with the GL (bottom-left) convention must have
      * its sample/clip Y flipped. False for OpenGL.
      *
-     * NOTE: only the D3D backends are currently confirmed to need the manual
-     * flip in engine code — vio handles Vulkan's clip-Y in its own 2D path and
-     * Metal has not been exercised here. Extend this when those paths are tested
-     * on hardware so the change is empirical, not a guess.
+     * NOTE: only the D3D backends need the manual flip in engine code — vio
+     * handles Vulkan's clip-Y in its own 2D path, and Metal was verified on
+     * hardware with php-vio's 3D pipeline (tests 089/090/092: render targets
+     * sampled through the same UV convention as OpenGL, no flip).
      */
     public function flipRenderTargetClipY(): bool
     {

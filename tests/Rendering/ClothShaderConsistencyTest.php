@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Locks the procedural-cloth sway formula across the three shader sources
- * so the GLSL (OpenGL), MSL (Metal), and Vio GLSL backends can't silently
+ * so the GLSL (OpenGL) and Vio GLSL backends can't silently
  * drift apart. Each "magic constant" is verified to appear in every shader
  * source - the literals are deliberately not extracted into a shared header
  * because each backend lives in its own language.
@@ -19,7 +19,6 @@ use PHPUnit\Framework\TestCase;
 final class ClothShaderConsistencyTest extends TestCase
 {
     private const GLSL_PATH  = __DIR__ . '/../../resources/shaders/source/mesh3d.vert.glsl';
-    private const METAL_PATH = __DIR__ . '/../../resources/shaders/source/mesh3d.metal';
     private const VIO_PATH   = __DIR__ . '/../../resources/shaders/source/vio/mesh3d.vert.glsl';
 
     /**
@@ -29,7 +28,6 @@ final class ClothShaderConsistencyTest extends TestCase
     {
         return [
             'glsl'  => (string) file_get_contents(self::GLSL_PATH),
-            'metal' => (string) file_get_contents(self::METAL_PATH),
             'vio'   => (string) file_get_contents(self::VIO_PATH),
         ];
     }

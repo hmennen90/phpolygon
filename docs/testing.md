@@ -124,31 +124,20 @@ The engine primitive this needs is a `renderToImage(RenderCommandList, w, h)` on
 existing `ScreenshotComparer`, with **per-backend baselines** (Metal ≠ WARP ≠
 lavapipe — like the font platform suffix).
 
-**Status per backend (from investigating php-vio directly):**
+**Status per backend:**
 
-- **vio Metal headless readback: FIXED** (`php-vio` commit — blit the Private
-  source texture into a Shared buffer instead of an invalid `getBytes` on
-  Private storage). A cleared headless frame now round-trips its exact colour
-  and the vsync-off path no longer segfaults. This unblocks **2D** pixel VRT on
-  real Metal.
-- **macOS 3D pixel VRT works** via the standalone `MetalRenderer3D` +
-  php-metalgpu (NOT vio — vio's Metal 3D pipeline is stubbed). Construct it
-  headless (`new MetalRenderer3D($w, $h, 0)`) and call
-  `renderToImage(RenderCommandList, $w, $h): string` — it renders the scene into
-  a Shared off-screen texture and reads it back as RGBA via `Metal\Texture::getBytes()`.
-  No window or drawable needed. Verified: `MetalRenderToImageTest` renders a lit
-  box off-screen on macOS runners (`#[RequiresOperatingSystem('Darwin')]` +
-  `#[RequiresPhpExtension('metal')]`, skipped elsewhere).
-- **D3D12 + Vulkan** ship real 3D pipelines *and* golden-compare `read_pixels`,
-  so **Windows (D3D12/WARP)** and **Linux (Vulkan/lavapipe)** are the viable
-  paths for native 3D pixel VRT. The generic entry point is
-  `VioRenderer3D::renderToImage(RenderCommandList, $w, $h): string` — same
-  pattern as the Metal one, running on whatever backend the vio context uses.
-  `VioRenderToImageTest` verifies the clear + read-back plumbing on any vio
-  backend (geometry only renders where the 3D pipeline is wired — D3D12 /
-  Vulkan / OpenGL, not vio-Metal). Full-geometry snapshots are taken on the
-  runner that has the target backend; wiring a Windows/Linux vio build into CI
-  is the remaining step.
+- **macOS / Metal — via vio.** php-vio's Metal backend has a full 3D pipeline
+  (2.9): `VioRenderer3D::renderToImage(RenderCommandList, $w, $h, $clear)` renders
+  into an offscreen render target and reads it back with `vio_read_render_target()`
+  (top-down RGBA8, works on every backend). `VioRenderToImageTest` asserts the
+  clear colour in a corner AND the lit box in the centre; it runs on whatever
+  backend `vio_create('auto')` picks (Metal on macOS). php-metal-gpu and the
+  standalone `MetalRenderer3D` are gone.
+- **Windows (D3D12/WARP) and Linux (Vulkan/lavapipe, OpenGL/Mesa)** use the same
+  `renderToImage()` entry point; baselines are per backend (Metal ≠ WARP ≠
+  lavapipe — like the font platform suffix).
+- Headless contexts report 1:1 sizes (`vio_framebuffer_size()` == requested), so
+  viewports and read-back buffers match the pixels returned.
 
 **Remaining blocker for CI:** building php-vio on the runners (it bundles
 Metal/D3D/Vulkan + SPIRV-Cross) is a large per-platform build, heavier than the

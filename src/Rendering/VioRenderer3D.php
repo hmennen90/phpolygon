@@ -127,6 +127,19 @@ class VioRenderer3D implements Renderer3DInterface
     private ?VioRenderTarget $bloomPingTarget = null;
     private ?VioRenderTarget $bloomPongTarget = null;
     private ?VioMesh $screenQuad = null;
+
+    /**
+     * GPU-rendered sky environment cubemap (reflection probe fallback). Used
+     * for u_environment_map when no baked `reflection_probe` is registered.
+     * Null until the first SetSky on a backend with cube render targets.
+     */
+    private ?VioEnvironmentCubemap $envCubemap = null;
+
+    /** True while renderToImage() runs: forces the direct-to-target path. */
+    private bool $renderingToImage = false;
+    /** The caller's render target during renderToImage(): re-bound as the scene
+     *  target after the shadow / SSAO passes unbind theirs. */
+    private ?\VioRenderTarget $externalSceneTarget = null;
     private bool $enableHdr = false;
     private float $bloomIntensity = 0.40;
     // Real-HDR threshold in LINEAR scene-luma. The scene renders into a LINEAR
@@ -805,6 +818,12 @@ class VioRenderer3D implements Renderer3DInterface
 
     private function offscreenIsActive(): bool
     {
+        // renderToImage() draws straight into the caller's render target; the
+        // render-scale / AA offscreen pipeline would present into the swapchain
+        // instead and the read-back would miss the scene.
+        if ($this->renderingToImage) {
+            return false;
+        }
         // The render-scale + AA offscreen pipeline. It was hard-disabled for a
         // long time because the present blit rendered black — the real cause was
         // a php-vio bug: vio_pipeline built the vertex input layout from shader
@@ -1059,10 +1078,8 @@ class VioRenderer3D implements Renderer3DInterface
      * VRT — runs on whatever backend the context uses: D3D11/D3D12 (WARP-capable
      * headless on Windows), Vulkan (lavapipe headless on Linux), or OpenGL.
      *
-     * Requires a backend with a wired 3D pipeline: geometry renders on
-     * D3D12 / Vulkan / OpenGL; on vio-Metal (3D pipeline stubbed) only the clear
-     * and the read-back plumbing run, so the frame comes back as the clear
-     * colour. The context should be sized to width×height (headless
+     * Geometry renders on every backend with a 3D pipeline (Metal, D3D11/D3D12,
+     * OpenGL). The context should be sized to width×height (headless
      * vio_create(..., ['headless' => true, 'vsync' => false])).
      *
      * Assumes default graphics settings (no render-scale / AA / bloom), so the
@@ -1088,15 +1105,31 @@ class VioRenderer3D implements Renderer3DInterface
             vio_clear($this->ctx, $clear->r, $clear->g, $clear->b, $clear->a);
         }
 
-        vio_begin($this->ctx);
-        vio_bind_render_target($this->ctx, $rt);
-        $this->beginFrame();
-        $this->render($commandList);
-        $this->endFrame();
-        vio_unbind_render_target($this->ctx);
-        vio_end($this->ctx);
+        $this->renderingToImage = true;
+        $this->externalSceneTarget = $rt;
+        try {
+            vio_begin($this->ctx);
+            vio_bind_render_target($this->ctx, $rt);
+            // Clear the bound target itself: in-frame vio_clear is eager on every
+            // backend (the pre-begin call above only covered the swapchain).
+            if ($clear !== null) {
+                vio_clear($this->ctx, $clear->r, $clear->g, $clear->b, $clear->a);
+            }
+            vio_viewport($this->ctx, 0, 0, $width, $height);
+            $this->beginFrame();
+            $this->render($commandList);
+            $this->endFrame();
+            vio_unbind_render_target($this->ctx);
+            vio_end($this->ctx);
+        } finally {
+            $this->renderingToImage = false;
+            $this->externalSceneTarget = null;
+        }
 
-        return (string) vio_read_pixels($this->ctx);
+        // Read the OFFSCREEN target, not the swapchain: the scene was drawn into
+        // $rt. vio_read_render_target returns top-down RGBA8 on every backend.
+        $rgba = vio_read_render_target($rt);
+        return $rgba === false ? '' : $rgba;
     }
 
     /**
@@ -1309,6 +1342,17 @@ class VioRenderer3D implements Renderer3DInterface
         $this->renderSdfAoPass($frameState);
         PerfProfiler::end();
 
+        // --- Environment cubemap (sky probe) — six face passes into a cube RT
+        // + mip chain, only when the SetSky parameters changed. Runs before the
+        // scene target is bound (binds/unbinds its own target like the passes
+        // above). Skipped when a baked reflection probe is registered.
+        if ($this->pendingSky !== null && !CubemapRegistry::has(self::ENV_CUBEMAP_ID)
+            && !CubemapRegistry::isProcedural(self::ENV_CUBEMAP_ID)) {
+            PerfProfiler::begin('render3d.submit.envcube');
+            $this->updateEnvironmentCubemap($this->pendingSky);
+            PerfProfiler::end();
+        }
+
         // HDR/Bloom disabled — D3D11 fullscreen quad draw produces no pixels (needs investigation)
         $hdrTarget = $this->enableHdr ? $this->hdrTarget : null;
 
@@ -1323,6 +1367,12 @@ class VioRenderer3D implements Renderer3DInterface
             $this->offscreenTarget->bindForDraw();
             $sceneViewportW = $this->offscreenTarget->width();
             $sceneViewportH = $this->offscreenTarget->height();
+        } elseif ($this->externalSceneTarget !== null) {
+            // renderToImage(): the shadow / SSAO / env-cube passes above left the
+            // swapchain bound — the scene belongs in the caller's target.
+            vio_bind_render_target($this->ctx, $this->externalSceneTarget);
+            $sceneViewportW = $this->width;
+            $sceneViewportH = $this->height;
         } else {
             $sceneViewportW = $this->width;
             $sceneViewportH = $this->height;
@@ -2939,6 +2989,62 @@ class VioRenderer3D implements Renderer3DInterface
         // the clip→world mapping we need is inverse(projection * rotView).
         $invVP = $projMatrix->multiply($rotView)->inverse()->toArray();
 
+        $this->drawSkyLayers($sky, $invVP, $this->sceneTargetIsHdr());
+    }
+
+    /**
+     * The GPU-rendered sky environment cubemap, once a SetSky has been rendered
+     * on a backend with cube render targets (null otherwise). Test/diagnostic hook.
+     */
+    public function environmentCubemap(): ?\VioCubemap
+    {
+        return $this->envCubemap?->cubemap();
+    }
+
+    /**
+     * Render the sky into the six faces of the environment cube target when the
+     * SetSky inputs changed, then rebuild its mip chain. Binds/unbinds its own
+     * target; leaves the swapchain bound. No-op on backends without cube RTs.
+     */
+    private function updateEnvironmentCubemap(SetSky $sky): void
+    {
+        if ($this->screenQuad === null) {
+            return;
+        }
+        $env = $this->envCubemap ??= new VioEnvironmentCubemap($this->ctx);
+        if (!$env->ensureAllocated() || !$env->needsUpdate($sky)) {
+            return;
+        }
+        $rt = $env->target();
+        if ($rt === null) {
+            return;
+        }
+        $faceSize = VioEnvironmentCubemap::FACE_SIZE;
+        foreach (VioEnvironmentCubemap::faceInverseViewProjections() as $face => $invVP) {
+            vio_bind_render_target($this->ctx, $rt, $face);
+            vio_clear($this->ctx, 0.0, 0.0, 0.0, 1.0);
+            vio_viewport($this->ctx, 0, 0, $faceSize, $faceSize);
+            // LDR cube (BGRA8): never linearise for the HDR resolve here.
+            $this->drawSkyLayers($sky, $invVP, false);
+        }
+        vio_unbind_render_target($this->ctx);
+        vio_generate_mipmaps($this->ctx, $rt);
+        $env->markRendered($sky);
+    }
+
+    /**
+     * The layered fullscreen sky passes (gradient, sun, moon, stars, clouds,
+     * haze) for one view: $invVP is inverse(projection * rotation-only view).
+     * Shared by the on-screen sky and the environment-cubemap face passes.
+     *
+     * @param float[] $invVP column-major float[16]
+     */
+    private function drawSkyLayers(SetSky $sky, array $invVP, bool $hdr): void
+    {
+        $quad = $this->screenQuad;
+        if ($quad === null) {
+            return;
+        }
         $camPos = $this->cameraPosition ?? new Vec3(0.0, 0.0, 0.0);
         $sunDir = $sky->sunDirection;
 
@@ -2949,7 +3055,7 @@ class VioRenderer3D implements Renderer3DInterface
         // its own shader (sky_*.frag.glsl), editable/toggleable on its own.
 
         // 1. Base gradient (opaque) — always.
-        $this->bindSkyPipeline('sky_gradient', VIO_BLEND_NONE);
+        $this->bindSkyPipeline('sky_gradient', VIO_BLEND_NONE, $hdr);
         vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
         vio_set_uniform($this->ctx, 'u_zenith_color', [$sky->zenithColor->r, $sky->zenithColor->g, $sky->zenithColor->b]);
         vio_set_uniform($this->ctx, 'u_horizon_color', [$sky->horizonColor->r, $sky->horizonColor->g, $sky->horizonColor->b]);
@@ -2958,7 +3064,7 @@ class VioRenderer3D implements Renderer3DInterface
 
         // 2. Sun (additive).
         if ($sky->sunIntensity > 0.0) {
-            $this->bindSkyPipeline('sky_sun', VIO_BLEND_ADDITIVE);
+            $this->bindSkyPipeline('sky_sun', VIO_BLEND_ADDITIVE, $hdr);
             vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
             vio_set_uniform($this->ctx, 'u_sun_direction', [$sunDir->x, $sunDir->y, $sunDir->z]);
             vio_set_uniform($this->ctx, 'u_sun_color', [$sky->sunColor->r, $sky->sunColor->g, $sky->sunColor->b]);
@@ -2972,7 +3078,7 @@ class VioRenderer3D implements Renderer3DInterface
         // 3. Moon (additive).
         if ($sky->moonIntensity > 0.0) {
             $moonDir = $sky->moonDirection ?? new Vec3(0.0, -1.0, 0.0);
-            $this->bindSkyPipeline('sky_moon', VIO_BLEND_ADDITIVE);
+            $this->bindSkyPipeline('sky_moon', VIO_BLEND_ADDITIVE, $hdr);
             vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
             vio_set_uniform($this->ctx, 'u_moon_direction', [$moonDir->x, $moonDir->y, $moonDir->z]);
             vio_set_uniform($this->ctx, 'u_moon_color', [$sky->moonColor->r, $sky->moonColor->g, $sky->moonColor->b]);
@@ -2984,7 +3090,7 @@ class VioRenderer3D implements Renderer3DInterface
 
         // 4. Stars (additive).
         if ($sky->starBrightness > 0.0) {
-            $this->bindSkyPipeline('sky_stars', VIO_BLEND_ADDITIVE);
+            $this->bindSkyPipeline('sky_stars', VIO_BLEND_ADDITIVE, $hdr);
             vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
             vio_set_uniform($this->ctx, 'u_star_brightness', $sky->starBrightness);
             vio_draw($this->ctx, $quad);
@@ -2998,7 +3104,7 @@ class VioRenderer3D implements Renderer3DInterface
             $wx = $wl > 1e-6 ? $wd->x / $wl : 1.0;
             $wz = $wl > 1e-6 ? $wd->z / $wl : 0.0;
 
-            $this->bindSkyPipeline('sky_clouds', VIO_BLEND_ALPHA);
+            $this->bindSkyPipeline('sky_clouds', VIO_BLEND_ALPHA, $hdr);
             vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
             vio_set_uniform($this->ctx, 'u_camera_pos', [$camPos->x, $camPos->y, $camPos->z]);
             vio_set_uniform($this->ctx, 'u_sun_direction', [$sunDir->x, $sunDir->y, $sunDir->z]);
@@ -3016,7 +3122,7 @@ class VioRenderer3D implements Renderer3DInterface
 
         // 6. Horizon haze (alpha).
         if ($sky->fogDensity > 0.0) {
-            $this->bindSkyPipeline('sky_haze', VIO_BLEND_ALPHA);
+            $this->bindSkyPipeline('sky_haze', VIO_BLEND_ALPHA, $hdr);
             vio_set_uniform($this->ctx, 'u_sky_inv_vp', $invVP);
             vio_set_uniform($this->ctx, 'u_horizon_color', [$sky->horizonColor->r, $sky->horizonColor->g, $sky->horizonColor->b]);
             vio_set_uniform($this->ctx, 'u_fog_density', $sky->fogDensity);
@@ -3030,9 +3136,9 @@ class VioRenderer3D implements Renderer3DInterface
      * NONE for the opaque gradient, ADDITIVE for emissive elements (sun/moon/
      * stars), ALPHA for clouds/haze.
      */
-    private function bindSkyPipeline(string $shaderId, int $blend): void
+    private function bindSkyPipeline(string $shaderId, int $blend, ?bool $hdrOverride = null): void
     {
-        $hdr = $this->sceneTargetIsHdr();
+        $hdr = $hdrOverride ?? $this->sceneTargetIsHdr();
         $key = 'sky:' . $shaderId . ($hdr ? ':hdr' : '');
         if (!isset($this->pipelineCache[$key])) {
             $shader = $this->shaderCache[$shaderId] ?? null;
@@ -3678,12 +3784,17 @@ class VioRenderer3D implements Renderer3DInterface
         // Cached by source identity in loadCubemap; u_has_environment_map=0 falls
         // back to the sky-tint reflection. (Bind is name-mapped to the sampler's
         // HLSL register by vio, so the logical unit here is arbitrary.)
-        $envCube = $this->loadCubemap(self::ENV_CUBEMAP_ID);
+        $envCube = $this->loadCubemap(self::ENV_CUBEMAP_ID) ?? $this->envCubemap?->cubemap();
         if ($envCube !== null) {
             vio_bind_cubemap($this->ctx, $envCube, self::ENV_CUBEMAP_SLOT);
             vio_set_uniform($this->ctx, 'u_environment_map', self::ENV_CUBEMAP_SLOT);
         }
         vio_set_uniform($this->ctx, 'u_has_environment_map', $envCube !== null ? 1 : 0);
+        // Last mip level of the bound cube (0 for un-mipped baked probes) so the
+        // shader can map roughness → LOD with textureLod().
+        vio_set_uniform($this->ctx, 'u_env_mip_max',
+            ($envCube !== null && $this->envCubemap !== null && $envCube === $this->envCubemap->cubemap())
+                ? VioEnvironmentCubemap::mipMax() : 0.0);
 
         // Cloud-shadow uniforms: the mesh samples the SAME cloud density field
         // toward the sun (sky_clouds.frag mirror) so the volumetric clouds cast

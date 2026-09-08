@@ -44,10 +44,11 @@ class EngineConfig
         public readonly string $vioBackend = 'auto',
         /**
          * When true and ext-vio is loaded, the 3D pipeline still runs through
-         * a native renderer (MetalRenderer3D / VulkanRenderer3D / OpenGLRenderer3D)
-         * keyed by $renderBackend3D, while vio continues to own the window and
-         * 2D pipeline. Useful on macOS where vio's Metal 3D pipeline isn't
-         * complete yet but php-metal's native renderer is.
+         * a native renderer (VulkanRenderer3D / OpenGLRenderer3D) keyed by
+         * $renderBackend3D, while vio continues to own the window and 2D
+         * pipeline. 'metal' has no native renderer any more — vio's Metal
+         * backend is the macOS 3D path (php-metal-gpu was retired) — so the
+         * flag is ignored there.
          */
         public readonly bool $useNative3D = false,
         /**

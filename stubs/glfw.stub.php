@@ -5,7 +5,7 @@
  *
  * After the switch to php-vio as the primary dependency, ext-glfw is no longer
  * installed in CI. These stubs declare all symbols that the OpenGL-based
- * Renderer2D and MetalRenderer3D still reference so that PHPStan can analyse
+ * Renderer2D and OpenGLRenderer3D still reference so that PHPStan can analyse
  * them without the extension present.
  */
 

@@ -72,7 +72,7 @@ PHPolygon\
 ├── Component\        Transform2D, SpriteRenderer, RigidBody2D, BoxCollider2D, ...
 ├── System\           Physics2DSystem, Renderer2DSystem, AudioSystem, InputMapSystem
 ├── Rendering\        VioRenderer2D, Renderer2D (NanoVG), VioRenderer3D, OpenGLRenderer3D,
-│                     VulkanRenderer3D, MetalRenderer3D, NullRenderer2D/3D, Camera2D,
+│                     VulkanRenderer3D, VioEnvironmentCubemap, NullRenderer2D/3D, Camera2D,
 │                     VioTextureManager, TextureManager, Color
 ├── Runtime\          VioWindow, Window (GLFW), NullWindow, GameLoop, VioInput, Input, Clock
 ├── Physics\          Collision2D, RaycastHit2D
