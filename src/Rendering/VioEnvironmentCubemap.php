@@ -95,11 +95,22 @@ final class VioEnvironmentCubemap
      * irrelevant for the direction). Face order +X,-X,+Y,-Y,+Z,-Z with the
      * standard cubemap up-vectors so `textureLod(cube, R)` maps world space.
      *
+     * The up-vectors assume the GL framebuffer convention (NDC top lands in
+     * the last texture row). Backends whose render targets have a top-left
+     * origin (D3D, Metal — {@see BackendConventions::flipRenderTargetClipY()})
+     * write the face vertically mirrored; pass $flipClipY = true to negate
+     * clip-Y so every backend produces the same face image.
+     *
      * @return array<int, float[]>
      */
-    public static function faceInverseViewProjections(): array
+    public static function faceInverseViewProjections(bool $flipClipY = false): array
     {
         $proj = Mat4::perspective(M_PI / 2.0, 1.0, 0.1, 10.0);
+        if ($flipClipY) {
+            $p = $proj->toArray();
+            $p[5] = -$p[5]; // column-major: projection[1][1]
+            $proj = new Mat4($p);
+        }
         $eye  = new Vec3(0.0, 0.0, 0.0);
         $faces = [
             [new Vec3( 1.0,  0.0,  0.0), new Vec3(0.0, -1.0,  0.0)],

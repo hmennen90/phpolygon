@@ -5,19 +5,19 @@ declare(strict_types=1);
 namespace PHPolygon\Rendering;
 
 /**
- * Holds the GLSL/MSL shader SNIPPETS a game injects to give {@see ProcModeRegistry}
+ * Holds the GLSL shader SNIPPETS a game injects to give {@see ProcModeRegistry}
  * modes their own looks, and splices them into the engine's base mesh3d shaders at
  * compile time.
  *
  * The engine base shaders ship only the `u_proc_mode == 0` standard-PBR arm plus
  * sentinel comments marking where the game's proc_mode code goes:
- *  - {@see HELPERS_SENTINEL} / {@see MSL_HELPERS_SENTINEL}  — file scope, the
+ *  - {@see HELPERS_SENTINEL}  — file scope, the
  *    game's per-mode helper functions.
- *  - {@see BRANCHES_SENTINEL} / {@see MSL_BRANCHES_SENTINEL} — inside `main()`, the
+ *  - {@see BRANCHES_SENTINEL} — inside `main()`, the
  *    `u_proc_mode == N` branch ladder (everything except the mode-0/else arm).
  *
  * A game registers, per mode, its helper text and branch text (per GLSL family and
- * for MSL). At compile time the renderer calls {@see spliceGlsl()}/{@see spliceMsl()}
+ *. At compile time the renderer calls {@see spliceGlsl()}
  * to replace each sentinel with the assembled snippet region, then hands the result
  * to the normal pipeline (glslang → SPIR-V → SPIRV-Cross on transpiling backends,
  * or straight to the driver). No new pipeline — the splice is pure string assembly.
@@ -25,14 +25,13 @@ namespace PHPolygon\Rendering;
  * BYTE-IDENTITY: the assembled region reproduces the pre-migration shader exactly.
  * That needs the snippets concatenated in ORIGINAL FILE ORDER, which is NOT the same
  * for every region (a file's helper functions and its branch ladder are ordered
- * differently, and VIO/GL/MSL diverge). So emission order is an explicit per-region
+ * differently, and VIO/GL diverge). So emission order is an explicit per-region
  * list set via {@see setOrder()}; concatenation is separator-free (each snippet is a
  * contiguous slice of the original region, carrying its own surrounding whitespace).
  *
  * Per-dialect divergence: the two GLSL families (VIO `source/vio` and native-GL
  * `source`) can need different helper text for the same mode (their noise/helper
- * APIs differ) — see the `$glHelpers`/`$glBranch` params. Native Metal (hand-written
- * MSL) has its own helper + branch text and its own mode coverage (a mode implemented
+ * APIs differ) — see the `$glHelpers`/`$glBranch` params. (A mode implemented
  * in one dialect may be absent in another). A mode absent from a dialect simply
  * registers no snippet there.
  */
@@ -41,7 +40,6 @@ final class ProcModeShaderRegistry
     // Helper sentinels are line comments: they replace a run of file-scope helper
     // functions and sit alone on a line, so nothing follows them on the line.
     public const HELPERS_SENTINEL = '// PHPOLYGON:PROCMODE_HELPERS';
-    public const MSL_HELPERS_SENTINEL = '// PHPOLYGON:PROCMODE_HELPERS_MSL';
 
     // Branch sentinels are BLOCK comments on purpose. The branch region ends at the
     // mode-0 `else` keyword, so the retained ` {<mode-0 body>}` follows the sentinel
@@ -50,7 +48,6 @@ final class ProcModeShaderRegistry
     // a COMPILABLE mode-0-only shader when no game has registered (or the sentinel is
     // replaced by empty), while a full splice still reproduces the original exactly.
     public const BRANCHES_SENTINEL = '/* PHPOLYGON:PROCMODE_BRANCHES */';
-    public const MSL_BRANCHES_SENTINEL = '/* PHPOLYGON:PROCMODE_BRANCHES_MSL */';
 
     // Post-color hook. A game-specific colour transform applied to the final lit
     // colour (e.g. an underwater absorption tint keyed off world position). Unlike
@@ -59,7 +56,7 @@ final class ProcModeShaderRegistry
     // for the helper function definition, one in main() for the call. Both are LINE
     // comments (each sits alone / at the end of the base's leading indent), so when no
     // game registers a transform they replace with '' and the base stays a valid,
-    // untinted shader. No MSL equivalent — native Metal ships no post-color transform.
+    // untinted shader.
     public const POSTCOLOR_HELPERS_SENTINEL = '// PHPOLYGON:POSTCOLOR_HELPERS';
     public const POSTCOLOR_SENTINEL = '// PHPOLYGON:POSTCOLOR';
 
@@ -68,17 +65,11 @@ final class ProcModeShaderRegistry
 
     public const REGION_GLSL_HELPERS = 'glsl_helpers';
     public const REGION_GLSL_BRANCHES = 'glsl_branches';
-    public const REGION_MSL_HELPERS = 'msl_helpers';
-    public const REGION_MSL_BRANCHES = 'msl_branches';
 
     /** @var array<int, array{vio: string, gl: string}> */
     private static array $glslHelpers = [];
     /** @var array<int, array{vio: string, gl: string}> */
     private static array $glslBranch = [];
-    /** @var array<int, string> */
-    private static array $mslHelpers = [];
-    /** @var array<int, string> */
-    private static array $mslBranch = [];
     /** @var array{vio: string, gl: string}|null helper def for the post-color transform */
     private static ?array $postColorHelpers = null;
     /** @var array{vio: string, gl: string}|null call site for the post-color transform */
@@ -106,17 +97,6 @@ final class ProcModeShaderRegistry
         ];
     }
 
-    /**
-     * Register the native-Metal (MSL) snippets for one proc_mode.
-     *
-     * @param string $branch  the mode's branch arm(s) inside the fragment function
-     * @param string $helpers file-scope MSL helper function(s); '' if the mode has none
-     */
-    public static function registerMsl(int $mode, string $branch, string $helpers = ''): void
-    {
-        self::$mslBranch[$mode] = $branch;
-        self::$mslHelpers[$mode] = $helpers;
-    }
 
     /**
      * Register the game's post-color transform: a helper function definition (file
@@ -175,15 +155,6 @@ final class ProcModeShaderRegistry
         );
     }
 
-    public static function mslHelpers(): string
-    {
-        return self::assemble(self::$mslHelpers, self::REGION_MSL_HELPERS, static fn (string $s): string => $s);
-    }
-
-    public static function mslBranches(): string
-    {
-        return self::assemble(self::$mslBranch, self::REGION_MSL_BRANCHES, static fn (string $s): string => $s);
-    }
 
     /**
      * Pick the per-family snippet for a GLSL entry, falling back to the VIO text
@@ -234,21 +205,11 @@ final class ProcModeShaderRegistry
         return $source;
     }
 
-    /** Splice the assembled MSL helpers + branches into a base MSL shader. */
-    public static function spliceMsl(string $source): string
-    {
-        $source = str_replace(self::MSL_HELPERS_SENTINEL, self::mslHelpers(), $source);
-        $source = str_replace(self::MSL_BRANCHES_SENTINEL, self::mslBranches(), $source);
-
-        return $source;
-    }
 
     public static function clear(): void
     {
         self::$glslHelpers = [];
         self::$glslBranch = [];
-        self::$mslHelpers = [];
-        self::$mslBranch = [];
         self::$postColorHelpers = null;
         self::$postColorCall = null;
         self::$order = [];

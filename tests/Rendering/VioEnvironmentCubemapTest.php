@@ -119,6 +119,31 @@ final class VioEnvironmentCubemapTest extends TestCase
         $renderer->renderToImage($list, $w, $h);
         self::assertSame($before, $renderer->environmentCubemap());
 
+        // The cube feeds the IBL term: a polished metal box shades differently
+        // with the environment map than with useEnvironmentMap = false.
+        MaterialRegistry::register('mirror', new Material(albedo: new Color(0.9, 0.9, 0.9), roughness: 0.05, metallic: 1.0));
+        MaterialRegistry::register('mirror_noenv', new Material(albedo: new Color(0.9, 0.9, 0.9), roughness: 0.05, metallic: 1.0, useEnvironmentMap: false));
+        $centre = static function (string $rgba) use ($w, $h): array {
+            $o = (intdiv($h, 2) * $w + intdiv($w, 2)) * 4;
+            return [ord($rgba[$o]), ord($rgba[$o + 1]), ord($rgba[$o + 2])];
+        };
+        $with = $centre($renderer->renderToImage(self::scene('mirror', $w, $h), $w, $h, new Color(0.1, 0.5, 0.9, 1.0)));
+        $without = $centre($renderer->renderToImage(self::scene('mirror_noenv', $w, $h), $w, $h, new Color(0.1, 0.5, 0.9, 1.0)));
+        self::assertNotSame($with, $without, 'environment reflection must change the mirror shading');
+
         vio_destroy($ctx);
+    }
+
+    private static function scene(string $material, int $w, int $h): RenderCommandList
+    {
+        $list = new RenderCommandList();
+        $list->add(new SetCamera(
+            Mat4::lookAt(new Vec3(2.5, 2.5, 3.5), new Vec3(0, 0, 0), new Vec3(0, 1, 0)),
+            Mat4::perspective(deg2rad(55.0), $w / $h, 0.1, 100.0),
+        ));
+        $list->add(new SetDirectionalLight(new Vec3(-0.4, -1.0, -0.5), new Color(1, 1, 1), 1.2));
+        $list->add(self::sky());
+        $list->add(new DrawMesh('box', $material, Mat4::identity()));
+        return $list;
     }
 }

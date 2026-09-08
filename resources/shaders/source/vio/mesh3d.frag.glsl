@@ -327,6 +327,23 @@ float geometrySmith(float NdotV, float NdotL, float a2) {
     return ggxV * ggxL;
 }
 
+// Environment (IBL) reflection: the bound cubemap — GPU sky probe (mipmapped,
+// u_env_mip_max > 0) or a baked reflection_probe — sampled at a roughness-
+// mapped LOD; falls back to the horizon/sky tint when no map is bound.
+vec3 sampleEnvironment(vec3 R, float roughness) {
+    float skyBlend = clamp(R.y * 2.0, 0.0, 1.0);
+    vec3 fallback = mix(u_horizon_color, u_sky_color, skyBlend);
+    if (u_has_environment_map == 0) {
+        return fallback;
+    }
+    float lod = roughness * (u_env_mip_max > 0.0 ? u_env_mip_max : 6.0);
+    vec3 envColor = textureLod(u_environment_map, R, lod).rgb;
+    // Un-mipped probes cannot be pre-filtered: blend towards the flat sky mix
+    // as roughness grows so the reflection still reads plausibly.
+    float blur = u_env_mip_max > 0.0 ? 0.0 : smoothstep(0.4, 1.0, roughness);
+    return mix(envColor, fallback, blur);
+}
+
 vec3 cookTorranceSpecular(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0) {
     vec3 H = normalize(V + L);
     float NdotH = max(dot(N, H), 0.0);
@@ -910,6 +927,17 @@ void main() {
         }
     }
 
+    // ---- Image-Based Lighting (IBL) reflection ----
+    // Skipped by materials that opt out (u_use_environment_map = 0); metals
+    // reflect fully, dielectrics only through the Fresnel term.
+    if (u_use_environment_map == 1) {
+        vec3 R = reflect(-V, N);
+        vec3 F_ibl = fresnelSchlick(NdotV, F0);
+        vec3 envColor = sampleEnvironment(R, roughness);
+        float iblWeight = mix(0.15, 1.0, metallic) * (1.0 - roughness * 0.6);
+        color += envColor * F_ibl * iblWeight * shadow;
+    }
+
     // ---- Clearcoat lobe (carpaint, dielectric F0 ≈ 0.04) ----
     if (u_clearcoat > 0.0 && u_dir_light_count > 0) {
         float ccRough = clamp(u_clearcoat_roughness, 0.02, 1.0);
@@ -921,12 +949,10 @@ void main() {
             color += ccSpec * u_dir_lights[0].color * u_dir_lights[0].intensity
                    * ccNdotL * shadow * u_clearcoat;
         }
-        // Sky-tint pseudo-IBL when no cubemap binding is available in
-        // this backend: blend horizon/sky based on the reflection vector
-        // and modulate by clearcoat roughness.
+        // Clearcoat IBL: sharp, weakly roughness-modulated reflection of the
+        // environment cube (sky/horizon tint when no map is bound).
         vec3 ccR = reflect(-V, N);
-        float skyBlend = clamp(ccR.y * 2.0, 0.0, 1.0);
-        vec3 ccEnv = mix(u_horizon_color, u_sky_color, skyBlend);
+        vec3 ccEnv = sampleEnvironment(ccR, ccRough);
         vec3 ccFres = fresnelSchlick(NdotV, ccF0);
         color += ccEnv * ccFres * u_clearcoat * (1.0 - ccRough * 0.5) * 0.4;
     }

@@ -217,7 +217,11 @@ class VioRenderer3D implements Renderer3DInterface
     private const PROBE_B_SLOT = 5;
 
     /** Logical unit + registry id for the reflection-probe cubemap (mesh pass). */
-    private const ENV_CUBEMAP_SLOT = 7;
+    // Unit 7 is taken by the legacy u_shadow_map alias (uploadShadowUniforms):
+    // sharing one GL unit between a samplerCube and a sampler2DShadow is a
+    // draw-time INVALID_OPERATION on OpenGL and a last-bind-wins collision on
+    // Metal's per-unit binding table — the environment map must own its unit.
+    private const ENV_CUBEMAP_SLOT = 10;
     private const ENV_CUBEMAP_ID = 'reflection_probe';
 
     // The baked coloured irradiance probe field (3× vio_texture_3d), from
@@ -3020,7 +3024,8 @@ class VioRenderer3D implements Renderer3DInterface
             return;
         }
         $faceSize = VioEnvironmentCubemap::FACE_SIZE;
-        foreach (VioEnvironmentCubemap::faceInverseViewProjections() as $face => $invVP) {
+        $flipClipY = $this->conventions()->flipRenderTargetClipY();
+        foreach (VioEnvironmentCubemap::faceInverseViewProjections($flipClipY) as $face => $invVP) {
             vio_bind_render_target($this->ctx, $rt, $face);
             vio_clear($this->ctx, 0.0, 0.0, 0.0, 1.0);
             vio_viewport($this->ctx, 0, 0, $faceSize, $faceSize);
@@ -3771,13 +3776,15 @@ class VioRenderer3D implements Renderer3DInterface
             vio_bind_texture($this->ctx, $this->probeTexR, self::PROBE_R_SLOT);
             vio_bind_texture($this->ctx, $this->probeTexG, self::PROBE_G_SLOT);
             vio_bind_texture($this->ctx, $this->probeTexB, self::PROBE_B_SLOT);
-            vio_set_uniform($this->ctx, 'u_probe_field_r', self::PROBE_R_SLOT);
-            vio_set_uniform($this->ctx, 'u_probe_field_g', self::PROBE_G_SLOT);
-            vio_set_uniform($this->ctx, 'u_probe_field_b', self::PROBE_B_SLOT);
             vio_set_uniform($this->ctx, 'u_probe_origin', [$this->probeOrigin->x, $this->probeOrigin->y, $this->probeOrigin->z]);
             vio_set_uniform($this->ctx, 'u_probe_size', [$this->probeSize->x, $this->probeSize->y, $this->probeSize->z]);
             vio_set_uniform($this->ctx, 'u_probe_range', $this->probeRange);
         }
+        // sampler3D units are assigned unconditionally for the same reason as
+        // u_environment_map below (GL unit-0 type aliasing kills the draw).
+        vio_set_uniform($this->ctx, 'u_probe_field_r', self::PROBE_R_SLOT);
+        vio_set_uniform($this->ctx, 'u_probe_field_g', self::PROBE_G_SLOT);
+        vio_set_uniform($this->ctx, 'u_probe_field_b', self::PROBE_B_SLOT);
         vio_set_uniform($this->ctx, 'u_probe_enabled', $probeOn ? 1.0 : 0.0);
 
         // Reflection probe cubemap: bind the baked environment so water mirrors it.
@@ -3787,8 +3794,11 @@ class VioRenderer3D implements Renderer3DInterface
         $envCube = $this->loadCubemap(self::ENV_CUBEMAP_ID) ?? $this->envCubemap?->cubemap();
         if ($envCube !== null) {
             vio_bind_cubemap($this->ctx, $envCube, self::ENV_CUBEMAP_SLOT);
-            vio_set_uniform($this->ctx, 'u_environment_map', self::ENV_CUBEMAP_SLOT);
         }
+        // Always point the sampler at its own unit, bound or not: a samplerCube
+        // left at the GLSL default (unit 0) aliases the sampler2D albedo unit and
+        // OpenGL rejects the whole draw (INVALID_OPERATION) — nothing renders.
+        vio_set_uniform($this->ctx, 'u_environment_map', self::ENV_CUBEMAP_SLOT);
         vio_set_uniform($this->ctx, 'u_has_environment_map', $envCube !== null ? 1 : 0);
         // Last mip level of the bound cube (0 for un-mipped baked probes) so the
         // shader can map roughness → LOD with textureLod().
