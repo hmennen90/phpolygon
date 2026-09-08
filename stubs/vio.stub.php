@@ -58,8 +58,20 @@ const VIO_WRAP_MIRROR = 2;
 const VIO_FEATURE_TEXTURE_3D = 22;
 const VIO_FEATURE_RENDER_TARGET_CUBE = 23;
 const VIO_FEATURE_MIPMAP_GEN = 24;
+const VIO_FEATURE_MRT = 25;
+const VIO_FEATURE_STORAGE_IMAGE = 26;
 const VIO_FEATURE_COMPUTE = 1;
 const VIO_FEATURE_VERTEX_STORAGE = 30;
+
+// Render-target colour attachment formats (vio_render_target 'attachments', vio_pipeline 'attachments')
+const VIO_FORMAT_RGBA8      = 0;
+const VIO_FORMAT_RGBA16F    = 1;
+const VIO_FORMAT_RGBA32F    = 2;
+const VIO_FORMAT_R11G11B10F = 3;
+const VIO_FORMAT_RG16F      = 4;
+const VIO_FORMAT_R16F       = 5;
+const VIO_FORMAT_R32F       = 6;
+const VIO_FORMAT_R8         = 7;
 
 // ----------------------------------------------------------------
 // Backend info
@@ -263,15 +275,15 @@ function vio_render_target(VioContext $ctx, array $config): VioRenderTarget|fals
 
 function vio_bind_render_target(VioContext $ctx, VioRenderTarget $target, int $face = -1, int $level = 0): void {}
 function vio_render_target_cubemap(VioRenderTarget $target): VioCubemap|false {}
-function vio_read_render_target(VioRenderTarget $target, int $face = -1): string|false {}
+function vio_read_render_target(VioRenderTarget $target, int $face = -1, int $attachment = 0): string|false {}
 function vio_generate_mipmaps(VioContext $ctx, VioRenderTarget|VioTexture|VioCubemap $object): bool {}
 
 function vio_unbind_render_target(VioContext $ctx): void {}
 
 /**
- * Get the depth or color texture from a render target for sampling.
+ * Get the depth or color texture from a render target for sampling ($attachment = MRT index).
  */
-function vio_render_target_texture(VioRenderTarget $target): VioTexture {}
+function vio_render_target_texture(VioRenderTarget $target, int $attachment = 0): VioTexture {}
 
 // ----------------------------------------------------------------
 // 2D drawing
@@ -406,6 +418,9 @@ function vio_compute_pipeline(VioContext $context, array $config): VioComputePip
 function vio_storage_buffer(VioContext $context, array $config): VioBuffer|false {}
 
 function vio_compute_bind_buffer(VioContext $context, VioComputePipeline $pipeline, VioBuffer $buffer, int $slot, int $access): void {}
+
+/** Bind a storage image (VioTexture created with 'storage' => true) — GLSL image2D/image3D at binding $slot. */
+function vio_compute_bind_image(VioContext $context, VioComputePipeline $pipeline, VioTexture $texture, int $slot, int $access): void {}
 
 function vio_compute_set_uniforms(VioContext $context, VioComputePipeline $pipeline, string $data): void {}
 
