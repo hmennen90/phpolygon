@@ -424,7 +424,9 @@ function vio_compute_bind_image(VioContext $context, VioComputePipeline $pipelin
 
 function vio_compute_set_uniforms(VioContext $context, VioComputePipeline $pipeline, string $data): void {}
 
-function vio_compute_dispatch(VioContext $context, VioComputePipeline $pipeline, int $gx, int $gy, int $gz): void {}
+/** @param array<string,mixed>|null $options ['async' => bool] — record into the open frame instead of blocking */
+function vio_compute_dispatch(VioContext $context, VioComputePipeline $pipeline, int $gx, int $gy, int $gz, ?array $options = null): void {}
+function vio_compute_wait(VioContext $context): void {}
 
 function vio_storage_buffer_read(VioContext $context, VioBuffer $buffer): string|false {}
 
