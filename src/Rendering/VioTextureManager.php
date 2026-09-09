@@ -21,6 +21,9 @@ class VioTextureManager extends TextureManager
     private int $nextId = 1;
     private ?VioRenderer2D $renderer = null;
 
+    /** Anisotropic filtering level (1..16) applied to textures loaded from now on; follows GraphicsSettings. */
+    private int $anisotropy = 4;
+
     public function __construct(
         private readonly VioContext $ctx,
         string $basePath = '',
@@ -48,7 +51,18 @@ class VioTextureManager extends TextureManager
 
         PerfProfiler::begin('texture.upload');
         try {
-            $vioTex = vio_texture($this->ctx, ['file' => $filePath]);
+            // Mip chain + anisotropic filtering: without mips a texture seen at
+            // a distance (sign plates, nameplates, decals) aliases into a
+            // shimmer as the sampler skips across texels; the driver's mip
+            // selection plus anisotropy keeps oblique views crisp instead of
+            // smeared. Both keys are honoured from php-vio 2.9 on (mip chains
+            // on D3D12 from 2.10) and are silently ignored by older builds,
+            // which then behave exactly as before.
+            $vioTex = vio_texture($this->ctx, [
+                'file' => $filePath,
+                'mipmaps' => true,
+                'anisotropy' => $this->anisotropy,
+            ]);
             if ($vioTex === false) {
                 throw new RuntimeException("Failed to load texture via vio: {$filePath}");
             }
@@ -109,6 +123,10 @@ class VioTextureManager extends TextureManager
     public function applySettings(GraphicsSettings $settings): void
     {
         parent::applySettings($settings);
+
+        // Textures loaded from here on pick up the new level; already-uploaded
+        // ones keep theirs (vio samplers are baked at creation).
+        $this->anisotropy = max(1, min(16, $settings->anisotropy));
 
         if (function_exists('vio_set_default_anisotropy')) {
             try {
