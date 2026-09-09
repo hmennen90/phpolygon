@@ -200,22 +200,29 @@ class MeshShaderHeadlessTest extends TestCase
                 },
             );
 
-            $a = $h->samplePixel($rgba, 8,  8);
-            $b = $h->samplePixel($rgba, 32, 32);
-            $c = $h->samplePixel($rgba, 56, 56);
+            // Freckles are SPARSE by design (two smoothstep gates on a noise
+            // stack), so three fixed sample points can all land on clear skin.
+            // Before php-vio 2.10 the surface uniforms never reached the GL
+            // shader at all and this test passed on quantisation noise alone;
+            // now that they do, scan the whole frame: somewhere a freckle must
+            // darken the albedo against the clear-skin baseline.
+            $baseline = $h->samplePixel($rgba, 0, 0);
             $maxDelta = 0.0;
-            foreach ([[$a, $b], [$a, $c], [$b, $c]] as [$p, $q]) {
-                $d = abs($p[0] - $q[0]) + abs($p[1] - $q[1]) + abs($p[2] - $q[2]);
-                if ($d > $maxDelta) {
-                    $maxDelta = $d;
+            for ($y = 0; $y < 64; $y++) {
+                for ($x = 0; $x < 64; $x++) {
+                    $p = $h->samplePixel($rgba, $x, $y);
+                    $d = abs($p[0] - $baseline[0]) + abs($p[1] - $baseline[1]) + abs($p[2] - $baseline[2]);
+                    if ($d > $maxDelta) {
+                        $maxDelta = $d;
+                    }
                 }
             }
             $this->assertGreaterThan(
                 0.01,
                 $maxDelta,
                 sprintf(
-                    'SKIN surface pattern must vary across pixels (a=(%.3f,%.3f,%.3f) b=(%.3f,%.3f,%.3f) c=(%.3f,%.3f,%.3f), maxDelta=%.3f)',
-                    $a[0], $a[1], $a[2], $b[0], $b[1], $b[2], $c[0], $c[1], $c[2], $maxDelta
+                    'SKIN surface pattern must vary across the frame (baseline=(%.3f,%.3f,%.3f), maxDelta=%.3f)',
+                    $baseline[0], $baseline[1], $baseline[2], $maxDelta
                 )
             );
         } finally {
